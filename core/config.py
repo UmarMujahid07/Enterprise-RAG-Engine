@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # gemini-1.5-pro later is a ONE-LINE change, not a find-and-replace
     # across five files.
     EMBEDDING_MODEL_NAME: str = "models/gemini-embedding-001"
-    GENERATION_MODEL_NAME: str = "gemini-1.5-flash"
+    GENERATION_MODEL_NAME: str = "gemini-3.5-flash"
 
     # --- Chunking Configuration ---
     # Exposed here (not hardcoded in document_loader.py) because chunk
