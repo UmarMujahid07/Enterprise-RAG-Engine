@@ -106,8 +106,15 @@ def answer_question(question: str) -> dict:
     # Step 3: Build the grounded prompt and call Gemini.
     prompt = _build_grounded_prompt(question, retrieved_chunks, retrieved_metadatas)
     response = generation_model.generate_content(prompt)
+    response_text = response.text.strip()
+    # If the model refused to answer (context didn't actually contain
+    # the answer), the retrieved chunks were irrelevant despite being
+    # the "closest" vectors found — don't present them to the client
+    # as if they were meaningful sources for a non-existent answer.
+    REFUSAL_TEXT = "I don't have enough information in the provided documents to answer this."
+    sources_to_return = [] if response_text == REFUSAL_TEXT else retrieved_metadatas
 
     return {
-        "answer": response.text.strip(),
-        "sources": retrieved_metadatas,
+        "answer": response_text,
+        "sources": sources_to_return,
     }
