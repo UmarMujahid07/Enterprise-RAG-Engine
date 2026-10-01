@@ -23,3 +23,5 @@ python-multipart == 0.0.20
 sqlalchemy==2.0.36        # ORM for the users database
 passlib[bcrypt]==1.7.4    # Password hashing
 python-jose[cryptography]==3.3.0   # JWT creation/validation
+
+bcrypt==4.0.1
