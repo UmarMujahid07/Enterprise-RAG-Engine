@@ -1,5 +1,7 @@
 venv/
 .env
+users.db
+create_tables.py
 __pycache__/
 data/
 vector_db/

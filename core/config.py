@@ -62,6 +62,20 @@ class Settings(BaseSettings):
     # live in separate collections within the same persistent client.
     COLLECTION_NAME: str = "enterprise_rag_collection"
 
+    # --- Auth & Database Configuration ---
+    # SQLite file path for the users database. Using SQLite (not Postgres)
+    # keeps this portfolio project dependency-free — no separate DB server
+    # to install/run. SQLAlchemy makes swapping to Postgres later trivial
+    # if this ever needed real production scale.
+    DATABASE_URL: str = "sqlite:///./users.db"
+
+    # Secret key used to SIGN and VERIFY JWTs (Step 8). This MUST be a
+    # long, random, secret string — treated with the same sensitivity as
+    # GOOGLE_API_KEY. No default provided on purpose: forces you to set
+    # it explicitly in .env rather than shipping a guessable default.
+    SECRET_KEY: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    
     # Tells pydantic-settings WHERE to look for the .env file and
     # to ignore any extra vars in the environment it doesn't recognize
     # (prevents crashes if your shell has unrelated env vars set).
