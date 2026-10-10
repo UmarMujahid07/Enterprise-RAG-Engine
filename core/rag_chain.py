@@ -69,52 +69,39 @@ ANSWER:"""
     return prompt
 
 
-def answer_question(question: str) -> dict:
-    """
-    Full RAG pipeline: embed question -> retrieve chunks -> generate
-    grounded answer -> return answer + source citations.
+REFUSAL_TEXT = "I don't have enough information in the provided documents to answer this."
 
-    Returns:
-        {
-            "answer": str,
-            "sources": list[dict]  # [{"source": ..., "page": ...}, ...]
-        }
+
+def answer_question(question: str, user_id: int) -> dict:
     """
-    # Step 1: Embed the question using the QUERY-optimized embedding
-    # (task_type="retrieval_query"), NOT the document-optimized one.
-    # This is the fix for the asymmetry gap flagged back in vector_store.py —
-    # we bypass collection.query(query_texts=...) and instead pass a
-    # pre-computed embedding directly via query_embeddings.
+    Full RAG pipeline, scoped to one user's documents:
+    embed question -> retrieve THIS user's chunks -> grounded answer.
+    """
+    # Query-optimized embedding (task_type="retrieval_query").
     query_vector = embed_query(question)
 
-    # Step 2: Retrieve the most relevant chunks using the correct vector.
-    results = vector_store.collection.query(
-        query_embeddings=[query_vector],
-        n_results=settings.TOP_K_RESULTS,
-    )
+    # Retrieval is filtered to the caller's own chunks only.
+    results = vector_store.query(query_vector, user_id=user_id)
 
     retrieved_chunks = results["documents"][0]
     retrieved_metadatas = results["metadatas"][0]
 
-    # Edge case: no documents in the store at all yet.
+    # This user hasn't uploaded anything (or has no matching chunks).
     if not retrieved_chunks:
         return {
-            "answer": "No documents have been uploaded yet. Please upload a document first.",
+            "answer": "No documents found. Please upload a document first.",
             "sources": [],
         }
 
-    # Step 3: Build the grounded prompt and call Gemini.
     prompt = _build_grounded_prompt(question, retrieved_chunks, retrieved_metadatas)
     response = generation_model.generate_content(prompt)
     response_text = response.text.strip()
-    # If the model refused to answer (context didn't actually contain
-    # the answer), the retrieved chunks were irrelevant despite being
-    # the "closest" vectors found — don't present them to the client
-    # as if they were meaningful sources for a non-existent answer.
-    REFUSAL_TEXT = "I don't have enough information in the provided documents to answer this."
-    sources_to_return = [] if response_text == REFUSAL_TEXT else retrieved_metadatas
 
-    return {
-        "answer": response_text,
-        "sources": sources_to_return,
-    }
+    # No sources on a refusal (retrieved chunks weren't actually used).
+    if response_text == REFUSAL_TEXT:
+        return {"answer": response_text, "sources": []}
+
+    # Return only source + page. Internal fields like user_id must
+    # never leak into API responses.
+    sources = [{"source": m["source"], "page": m["page"]} for m in retrieved_metadatas]
+    return {"answer": response_text, "sources": sources}

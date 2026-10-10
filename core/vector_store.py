@@ -1,17 +1,12 @@
 """
 core/vector_store.py
 
-Manages the persistent ChromaDB collection — the single point of
-contact between the rest of the application and the vector database.
+Persistent ChromaDB collection manager with per-user data isolation.
 
-Why this file exists:
-Nothing else in the system should import `chromadb` directly. If
-main.py, document_loader.py, or rag_chain.py each initialized their
-own ChromaDB client, we'd risk multiple processes/connections fighting
-over the same on-disk database, and any change to storage logic
-(collection name, embedding function, persistence path) would need to
-be updated in multiple places. This file is the single, testable
-boundary around the vector database.
+Isolation model: ONE shared collection, but every chunk carries a
+`user_id` in its metadata, and every search filters on it. ChromaDB
+applies the `where` filter BEFORE ranking by similarity, so a user's
+query can never even see another user's chunks.
 """
 
 import chromadb
@@ -20,21 +15,9 @@ from core.embedding_function import GeminiEmbeddingFunction
 
 
 class VectorStore:
-    """
-    Thin wrapper around a persistent ChromaDB collection. Handles
-    client initialization, collection creation/loading, chunk
-    insertion, and similarity search.
-    """
-
     def __init__(self):
-        # PersistentClient writes to disk at VECTOR_DB_DIR — this is
-        # what makes embeddings survive a server restart. Without this,
-        # every reboot would mean re-embedding and re-uploading every PDF.
+        # PersistentClient writes to disk, so data survives restarts.
         self.client = chromadb.PersistentClient(path=str(settings.VECTOR_DB_DIR))
-
-        # get_or_create_collection is idempotent: on first run it creates
-        # the collection; on every subsequent run (e.g. server restart)
-        # it just reconnects to the existing one instead of erroring out.
         self.collection = self.client.get_or_create_collection(
             name=settings.COLLECTION_NAME,
             embedding_function=GeminiEmbeddingFunction(),
@@ -45,56 +28,43 @@ class VectorStore:
         chunks: list[str],
         metadatas: list[dict],
         ids: list[str],
+        user_id: int,
     ) -> None:
-        """
-        Inserts text chunks into the collection. ChromaDB automatically
-        calls GeminiEmbeddingFunction.__call__ on `chunks` internally —
-        we never embed manually here, keeping this method a pure
-        pass-through to ChromaDB's storage layer.
+        """Stores chunks stamped with the owner's user_id."""
+        # Stamp ownership onto every chunk's metadata. Callers can't
+        # forget it, because this is the only way chunks get in.
+        owned_metadatas = [{**meta, "user_id": user_id} for meta in metadatas]
 
-        Args:
-            chunks: Raw text chunks extracted from a document.
-            metadatas: Per-chunk metadata (e.g. source filename, page
-                number) — critical for citing WHERE an answer came from.
-            ids: Unique string ID per chunk (e.g. "filename_page3_chunk2").
-                 Required by ChromaDB; reusing an ID overwrites that entry,
-                 which we'll rely on later to avoid duplicate re-uploads.
-        """
+        # Prefix IDs with the user id so two users uploading identically
+        # named files can never overwrite each other's chunks
+        # (ChromaDB overwrites on duplicate IDs).
+        owned_ids = [f"u{user_id}_{chunk_id}" for chunk_id in ids]
+
         self.collection.add(
             documents=chunks,
-            metadatas=metadatas,
-            ids=ids,
+            metadatas=owned_metadatas,
+            ids=owned_ids,
         )
 
-    def query(self, query_text: str, n_results: int = None) -> dict:
+    def query(self, query_embedding: list[float], user_id: int, n_results: int = None) -> dict:
         """
-        Runs a similarity search against the collection.
-
-        Note: we pass query_text here (not a pre-computed embedding).
-        ChromaDB will call our embedding_function on it too — but that
-        means it uses __call__ (task_type="retrieval_document"), NOT
-        our asymmetric embed_query() from Step 2. We accept this minor
-        inconsistency for now since ChromaDB's collection-level API
-        doesn't cleanly support swapping task types per call; rag_chain.py
-        will address this properly by embedding manually if needed.
-
-        Args:
-            query_text: The user's natural language question.
-            n_results: How many top chunks to retrieve. Defaults to
-                settings.TOP_K_RESULTS if not overridden.
+        Similarity search restricted to ONE user's chunks.
+        Takes a pre-computed query embedding (embed_query from Step 2)
+        so the retrieval_query task type is used correctly.
         """
         return self.collection.query(
-            query_texts=[query_text],
+            query_embeddings=[query_embedding],
             n_results=n_results or settings.TOP_K_RESULTS,
+            where={"user_id": user_id},  # <-- the isolation mechanism
         )
 
-    def document_count(self) -> int:
-        """Utility for debugging/testing — confirms how many chunks
-        currently live in the collection."""
-        return self.collection.count()
+    def document_count(self, user_id: int = None) -> int:
+        """Total chunks, or only one user's chunks if user_id is given."""
+        if user_id is None:
+            return self.collection.count()
+        # include=[] fetches IDs only (cheap), then we count them.
+        return len(self.collection.get(where={"user_id": user_id}, include=[])["ids"])
 
 
-# --- Singleton instance ---
-# Imported everywhere else as: from core.vector_store import vector_store
-# One shared connection to the persistent DB for the whole app lifecycle.
+# Singleton shared by the whole app.
 vector_store = VectorStore()
