@@ -179,6 +179,28 @@ async def list_user_documents(
     )
 
 
+@app.delete("/documents/{document_id}")
+async def delete_user_document(
+    document_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a document belonging to the authenticated user."""
+    deleted = vector_store.delete_document(
+        document_id=document_id,
+        user_id=current_user.id,
+    )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    return {
+        "message": "Document deleted successfully.",
+        "document_id": document_id,
+    }
+
 
 @app.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(
