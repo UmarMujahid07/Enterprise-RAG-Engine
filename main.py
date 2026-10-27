@@ -94,6 +94,18 @@ class UploadResponse(BaseModel):
     total_chunks_in_store: int  # this user's chunks only
 
 
+class DocumentItem(BaseModel):
+    id: str
+    filename: str
+    chunks_count: int
+    pages: list[int]
+
+
+class DocumentsResponse(BaseModel):
+    documents: list[DocumentItem]
+    total: int
+
+
 # --- Public endpoints ---
 
 @app.post("/register", response_model=UserResponse, status_code=201)
@@ -150,6 +162,22 @@ async def health_check():
 async def read_me(current_user: User = Depends(get_current_user)):
     """Returns the logged-in user. Handy for verifying a token works."""
     return UserResponse(id=current_user.id, email=current_user.email)
+
+
+@app.get("/documents", response_model=DocumentsResponse)
+async def list_user_documents(
+    current_user: User = Depends(get_current_user),
+):
+    """List only the authenticated user's documents."""
+    documents = vector_store.list_documents(
+        user_id=current_user.id
+    )
+
+    return DocumentsResponse(
+        documents=documents,
+        total=len(documents),
+    )
+
 
 
 @app.post("/upload-pdf", response_model=UploadResponse)

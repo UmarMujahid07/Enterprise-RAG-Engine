@@ -64,6 +64,46 @@ class VectorStore:
             return self.collection.count()
         # include=[] fetches IDs only (cheap), then we count them.
         return len(self.collection.get(where={"user_id": user_id}, include=[])["ids"])
+    
+    def list_documents(self, user_id: int) -> list[dict]:
+        """List unique documents belonging to one user."""
+        result = self.collection.get(
+            where={"user_id": user_id},
+            include=["metadatas"],
+        )
+
+        documents = {}
+
+        for metadata in result.get("metadatas") or []:
+            source = metadata.get("source")
+
+            if not source:
+                continue
+
+            if source not in documents:
+                documents[source] = {
+                    "id": source,
+                    "filename": source,
+                    "chunks_count": 0,
+                    "pages": set(),
+                }
+
+            documents[source]["chunks_count"] += 1
+
+            page = metadata.get("page")
+            if page is not None:
+                documents[source]["pages"].add(page)
+
+        return [
+            {
+                **document,
+                "pages": sorted(document["pages"]),
+            }
+            for document in sorted(
+                documents.values(),
+                key=lambda item: item["filename"].lower(),
+            )
+        ]
 
 
 # Singleton shared by the whole app.
