@@ -226,6 +226,10 @@ async def upload_pdf(
     try:
         chunks, metadatas, ids = load_and_chunk_pdf(str(save_path))
 
+        # Keep a stable internal ID and the original display filename.
+        for metadata in metadatas:
+            metadata["document_id"] = save_path.name
+            metadata["original_filename"] = original_name
         if not chunks:
             raise HTTPException(
                 status_code=422,

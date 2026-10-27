@@ -23,6 +23,22 @@ from core.vector_store import vector_store
 # safe to call again, it's idempotent (just resets the API key config).
 genai.configure(api_key=settings.GOOGLE_API_KEY)
 
+
+
+import re
+
+
+def _display_filename(metadata: dict) -> str:
+    """Return the original filename when available, with legacy fallback."""
+    original_filename = metadata.get("original_filename")
+    if original_filename:
+        return original_filename
+
+    source = metadata.get("source", "Unknown document")
+
+    # Older chunks store a UUID followed by an underscore and filename.
+    return re.sub(r"^[0-9a-fA-F]{32}_", "", source)
+
 # Initialize the generation model once at import time, not per-request —
 # avoids re-instantiating this object on every single query.
 generation_model = genai.GenerativeModel(settings.GENERATION_MODEL_NAME)
@@ -46,9 +62,12 @@ def _build_grounded_prompt(question: str, retrieved_chunks: list[str], metadatas
     # source file and page so the model can (and must) cite them.
     context_sections = []
     for i, (chunk, meta) in enumerate(zip(retrieved_chunks, metadatas), start=1):
+        
+        filename = _display_filename(meta)
         context_sections.append(
-            f"[Source {i}: {meta['source']}, Page {meta['page']}]\n{chunk}"
+            f"[Source {i}: {filename}, Page {meta['page']}]\n{chunk}"
         )
+
     context_block = "\n\n".join(context_sections)
 
     prompt = f"""You are a document question-answering assistant. Answer the QUESTION using ONLY the CONTEXT provided below.
@@ -103,5 +122,13 @@ def answer_question(question: str, user_id: int) -> dict:
 
     # Return only source + page. Internal fields like user_id must
     # never leak into API responses.
-    sources = [{"source": m["source"], "page": m["page"]} for m in retrieved_metadatas]
+    
+    sources = [
+        {
+            "source": _display_filename(metadata),
+            "page": metadata["page"],
+        }
+        for metadata in retrieved_metadatas
+    ]
+
     return {"answer": response_text, "sources": sources}

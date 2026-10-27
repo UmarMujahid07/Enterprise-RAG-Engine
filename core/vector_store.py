@@ -65,8 +65,11 @@ class VectorStore:
         # include=[] fetches IDs only (cheap), then we count them.
         return len(self.collection.get(where={"user_id": user_id}, include=[])["ids"])
     
+    
     def list_documents(self, user_id: int) -> list[dict]:
         """List unique documents belonging to one user."""
+        import re
+
         result = self.collection.get(
             where={"user_id": user_id},
             include=["metadatas"],
@@ -80,19 +83,28 @@ class VectorStore:
             if not source:
                 continue
 
-            if source not in documents:
-                documents[source] = {
-                    "id": source,
-                    "filename": source,
+            # Existing source values are UUID-prefixed stored filenames.
+            document_id = metadata.get("document_id") or source
+            original_filename = metadata.get("original_filename")
+
+            # Backward compatibility for chunks ingested before Step 12.4.
+            if not original_filename:
+                match = re.match(r"^[0-9a-fA-F]{32}_(.+)$", source)
+                original_filename = match.group(1) if match else source
+
+            if document_id not in documents:
+                documents[document_id] = {
+                    "id": document_id,
+                    "filename": original_filename,
                     "chunks_count": 0,
                     "pages": set(),
                 }
 
-            documents[source]["chunks_count"] += 1
+            documents[document_id]["chunks_count"] += 1
 
             page = metadata.get("page")
             if page is not None:
-                documents[source]["pages"].add(page)
+                documents[document_id]["pages"].add(page)
 
         return [
             {
@@ -104,6 +116,7 @@ class VectorStore:
                 key=lambda item: item["filename"].lower(),
             )
         ]
+
     
     def delete_document(self, document_id: str, user_id: int) -> bool:
         """Delete one document's chunks, restricted to its owner."""
