@@ -123,12 +123,18 @@ def answer_question(question: str, user_id: int) -> dict:
     # Return only source + page. Internal fields like user_id must
     # never leak into API responses.
     
+    
     sources = [
         {
             "source": _display_filename(metadata),
             "page": metadata["page"],
+            "snippet": chunk,
         }
-        for metadata in retrieved_metadatas
+        for chunk, metadata in zip(
+            retrieved_chunks,
+            retrieved_metadatas,
+        )
     ]
+
 
     return {"answer": response_text, "sources": sources}

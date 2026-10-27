@@ -81,6 +81,7 @@ class QueryRequest(BaseModel):
 class SourceMetadata(BaseModel):
     source: str
     page: int
+    snippet: str
 
 
 class QueryResponse(BaseModel):
