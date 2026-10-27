@@ -16,21 +16,25 @@ Multi-tenant document question answering built with **FastAPI**, **Google Gemini
 
 ## Architecture
 
+**Ingestion:** every chunk is stored with its owner (`user_id`), source file, and page number.
+
 ```mermaid
 flowchart LR
-    subgraph Ingestion
-        A["PDF upload"] --> B["pypdf: extract text page by page"]
-        B --> C["RecursiveCharacterTextSplitter"]
-        C --> D["Gemini embeddings: retrieval_document"]
-        D --> E[("ChromaDB<br/>chunk + user_id + source + page")]
-    end
-    subgraph Query
-        Q["Question"] --> R["Gemini embedding: retrieval_query"]
-        R --> S["ChromaDB search<br/>filtered by user_id"]
-        S --> T["Grounded prompt"]
-        T --> U["Gemini generation"]
-        U --> V["Answer + citations"]
-    end
+    A[PDF upload] --> B[Extract text page by page]
+    B --> C[Split into overlapping chunks]
+    C --> D[Gemini document embeddings]
+    D --> E[ChromaDB with user id and page metadata]
+```
+
+**Query:** the search only ever sees the caller's own chunks.
+
+```mermaid
+flowchart LR
+    Q[Question] --> R[Gemini query embedding]
+    R --> S[ChromaDB search filtered by user id]
+    S --> T[Grounded prompt]
+    T --> U[Gemini generation]
+    U --> V[Answer with citations]
 ```
 
 **Auth flow:** `POST /register` → `POST /login` (returns a JWT) → send `Authorization: Bearer <token>` on protected routes. The user's identity always comes from the **verified token**, never from request data, so a client cannot claim to be someone else.
