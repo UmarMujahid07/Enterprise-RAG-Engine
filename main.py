@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
@@ -36,6 +38,19 @@ app = FastAPI(
     description="Multi-tenant document QA powered by Gemini + ChromaDB",
     version="2.0.0",
 )
+
+# --- CORS: allow the frontend to communicate with this API ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        # Add your deployed Vercel frontend URL here later.
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
 
 # Creates the users table on startup if it doesn't exist (no-op otherwise).
 Base.metadata.create_all(bind=engine)
