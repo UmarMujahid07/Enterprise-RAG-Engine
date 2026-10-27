@@ -12,8 +12,9 @@ scopes every vector-store read/write to that user's own documents.
 import shutil
 import uuid
 from pathlib import Path
-
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from collections import defaultdict, deque
+from time import monotonic
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -32,7 +33,8 @@ from core.document_loader import load_and_chunk_pdf
 from core.models import User
 from core.rag_chain import answer_question
 from core.vector_store import vector_store
-
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
+MAX_DOCUMENTS_PER_USER = 20
 app = FastAPI(
     title="Enterprise RAG Engine",
     description="Multi-tenant document QA powered by Gemini + ChromaDB",
@@ -51,6 +53,50 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
+
+def rate_limit(max_requests: int):
+    """Apply a per-IP, per-endpoint sliding-window rate limit."""
+
+    def dependency(request: Request) -> None:
+        client_ip = (
+            request.client.host
+            if request.client is not None
+            else "unknown"
+        )
+        key = (client_ip, request.url.path)
+        now = monotonic()
+        events = _rate_limit_events[key]
+
+        while (
+            events
+            and now - events[0] >= _RATE_LIMIT_WINDOW_SECONDS
+        ):
+            events.popleft()
+
+        if len(events) >= max_requests:
+            retry_after = max(
+                1,
+                int(
+                    _RATE_LIMIT_WINDOW_SECONDS
+                    - (now - events[0])
+                ),
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Rate limit exceeded. "
+                    f"Try again in {retry_after} seconds."
+                ),
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        events.append(now)
+
+    return dependency
 
 # Creates the users table on startup if it doesn't exist (no-op otherwise).
 Base.metadata.create_all(bind=engine)
@@ -125,7 +171,9 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)  # loads the DB-generated id
     return UserResponse(id=new_user.id, email=new_user.email)
-@app.post("/login", response_model=TokenResponse)
+@app.post("/login", 
+response_model=TokenResponse,
+dependencies=[Depends(rate_limit(10))])
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
@@ -203,7 +251,9 @@ async def delete_user_document(
     }
 
 
-@app.post("/upload-pdf", response_model=UploadResponse)
+@app.post("/upload-pdf", 
+          response_model=UploadResponse,
+          dependencies=[Depends(rate_limit(10))])
 async def upload_pdf(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -216,6 +266,32 @@ async def upload_pdf(
     # into the filename (e.g. "../../x.pdf"); the UUID prefix prevents
     # collisions between uploads with the same name.
     original_name = Path(file.filename).name
+    
+    # Check the uploaded file size before saving or processing it.
+    file.file.seek(0, 2)
+    upload_size = file.file.tell()
+    file.file.seek(0)
+
+    if upload_size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="PDF exceeds the 10 MB upload limit.",
+        )
+
+    # Enforce the per-user document limit.
+    existing_documents = vector_store.list_documents(
+        user_id=current_user.id
+    )
+
+    if len(existing_documents) >= MAX_DOCUMENTS_PER_USER:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Document limit reached (20 documents per user). "
+                "Delete a document before uploading another."
+            ),
+        )
+
     save_path: Path = settings.DATA_DIR / f"{uuid.uuid4().hex}_{original_name}"
 
     try:
@@ -251,7 +327,9 @@ async def upload_pdf(
     )
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query",
+           response_model=QueryResponse,
+           dependencies=[Depends(rate_limit(10))])
 async def query_documents(
     request: QueryRequest,
     current_user: User = Depends(get_current_user),
