@@ -1,10 +1,144 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
+
+  const handleLogout = () => {
+    localStorage.removeItem("rag_access_token");
+    localStorage.removeItem("rag_user_email");
+    window.location.replace("/login");
+  };
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      setUploadError("Please select a PDF file first.");
+      return;
+    }
+
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      setUploadError("The PDF must be smaller than 10 MB.");
+      return;
+    }
+
+    const token = localStorage.getItem("rag_access_token");
+
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
+
+    setUploading(true);
+    setUploadMessage("");
+    setUploadError("");
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const response = await fetch("http://localhost:8000/upload-pdf", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const result: { detail?: string; message?: string } =
+        await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setUploadError(result.detail || "PDF upload failed.");
+        return;
+      }
+
+      setUploadMessage(result.message || "PDF uploaded successfully!");
+
+      const documentsResponse = await fetch(
+        "http://localhost:8000/documents",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (documentsResponse.ok) {
+        const documentsData = await documentsResponse.json();
+        setDocumentCount(documentsData.total);
+      }
+
+      setSelectedFile(null);
+    } catch {
+      setUploadError("Could not connect to the backend. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const [question, setQuestion] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+  const [documentCount, setDocumentCount] = useState<number | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [authChecking, setAuthChecking] = useState(true);
+
+  useEffect(() => {
+    async function verifySession() {
+      const token = localStorage.getItem("rag_access_token");
+
+      if (!token) {
+        router.replace("/login");
+        return;
+      }
+      setUserEmail(localStorage.getItem("rag_user_email") || "");
+
+      try {
+        const response = await fetch("http://localhost:8000/me", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          localStorage.removeItem("rag_access_token");
+          localStorage.removeItem("rag_user_email");
+          router.replace("/login");
+          return;
+        }
+
+        const documentsResponse = await fetch(
+          "http://localhost:8000/documents",
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (documentsResponse.ok) {
+          const documentsData = await documentsResponse.json();
+          setDocumentCount(documentsData.total);
+        }
+
+        setAuthChecking(false);
+      } catch {
+        localStorage.removeItem("rag_access_token");
+        localStorage.removeItem("rag_user_email");
+        router.replace("/login");
+      }
+    }
+
+    verifySession();
+  }, [router]);
+
+  if (authChecking) {
+    return <div className="auth-loading">Checking your session...</div>;
+  }
 
   return (
     <main className="dashboard">
@@ -37,7 +171,17 @@ export default function Home() {
             <p className="eyebrow">WORKSPACE / OVERVIEW</p>
             <h1>Knowledge Dashboard</h1>
           </div>
-          <div className="user-avatar">U</div>
+          <div className="topbar-actions">
+            <span className="user-email">{userEmail}</span>
+
+            <div className="user-avatar">
+              {(userEmail || "U").charAt(0).toUpperCase()}
+            </div>
+
+            <button className="logout-button" onClick={handleLogout}>
+              Log out
+            </button>
+          </div>
         </header>
 
         <section className="welcome">
@@ -70,8 +214,8 @@ export default function Home() {
           <article className="stat-card">
             <span className="stat-icon purple">▤</span>
             <p>Documents indexed</p>
-            <h3>—</h3>
-            <small>Connect your API to load data</small>
+            <h3>{documentCount === null ? "Loading..." : documentCount}</h3>
+            <small>Your uploaded documents</small>
           </article>
           <article className="stat-card">
             <span className="stat-icon green">✳</span>
@@ -99,12 +243,67 @@ export default function Home() {
 
             <div className="upload-zone">
               <div className="upload-icon">↑</div>
-              <h3>Your documents will live here</h3>
+
+              <h3>Upload your documents</h3>
+
               <p>
-                PDF upload and document management will be connected to your
-                FastAPI backend in the next stage.
+                Select a PDF document to add it to your knowledge base.
               </p>
-              <span className="file-note">PDF files · Backend integration pending</span>
+
+              <label className="upload-button">
+                {selectedFile ? "Change PDF" : "Choose PDF"}
+
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                    setUploadMessage("");
+                    setUploadError("");
+                  }}
+                />
+              </label>
+
+              {selectedFile && (
+                <p className="file-note">
+                  Selected: {selectedFile.name}
+                </p>
+              )}
+
+              {selectedFile && (
+                <button
+                  className="upload-button"
+                  onClick={handleUpload}
+                  disabled={uploading}
+                >
+                  {uploading ? "Uploading..." : "Upload PDF"}
+                </button>
+              )}
+
+              {uploadMessage && (
+                <div className="upload-success">
+                  <span className="upload-success-icon">✓</span>
+                  <div>
+                    <strong>Upload complete</strong>
+                    <p>{uploadMessage}</p>
+                  </div>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className="upload-error" role="alert">
+                  <span className="upload-error-icon">!</span>
+                  <div>
+                    <strong>Upload failed</strong>
+                    <p>{uploadError}</p>
+                  </div>
+                </div>
+              )}
+              {!selectedFile && (
+                <span className="file-note">PDF files only · Maximum 10 MB</span>
+              )}
             </div>
 
             <div className="empty-documents">
