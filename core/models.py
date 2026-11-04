@@ -1,37 +1,84 @@
-"""
-core/models.py
 
-SQLAlchemy ORM models — the schema for data stored in the SQL database.
-
-Why this file exists:
-Separating table definitions from database connection logic (database.py)
-and from business logic (auth.py, main.py) keeps each concern isolated:
-if you ever add a new table (e.g. tracking upload history per user),
-it's added here, without touching connection setup or auth logic.
-"""
-
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    ForeignKey,
+    JSON,
+)
+from sqlalchemy.orm import relationship
+from datetime import datetime, timezone
 from core.database import Base
-
+def utc_now():
+    return datetime.now(timezone.utc)
 
 class User(Base):
-    """
-    Represents a registered user/tenant of the RAG engine.
-
-    Note: we NEVER store plain-text passwords — only hashed_password,
-    populated by auth.py using bcrypt. This table has no
-    knowledge of hashing itself; that logic is deliberately kept
-    separate (single responsibility).
-    """
-
+    """Registered user of the RAG engine."""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-
-    # unique=True enforces one account per email at the DATABASE level —
-    # not just in application code — so this holds even under concurrent
-    # registration attempts (a race condition application code alone
-    # can't fully prevent).
     email = Column(String, unique=True, index=True, nullable=False)
-
     hashed_password = Column(String, nullable=False)
+
+    conversations = relationship(
+        "Conversation",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+class Conversation(Base):
+    """A conversation belonging to one authenticated user."""
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title = Column(String(200), nullable=False, default="New conversation")
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+    user = relationship("User", back_populates="conversations")
+
+    messages = relationship(
+        "Message",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
+
+
+class Message(Base):
+    """A user or assistant message inside a conversation."""
+
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_id = Column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+
+    # Stores citation/source metadata as JSON.
+    sources = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    conversation = relationship("Conversation", back_populates="messages")

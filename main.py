@@ -1,25 +1,55 @@
+
 """
 main.py
 
-FastAPI REST server: public auth endpoints + protected RAG endpoints.
+FastAPI REST API for the Enterprise RAG Engine.
 
-Auth flow: /register -> /login (returns JWT) -> send
-"Authorization: Bearer <token>" on /upload-pdf and /query.
-get_current_user verifies the token and injects the User; its id
-scopes every vector-store read/write to that user's own documents.
+Features:
+- User registration and JWT authentication
+- User-specific document management
+- PDF upload and ingestion
+- Document-grounded question answering
+- Persistent multi-turn conversations
 """
+
+# ============================================================
+# 1. STANDARD LIBRARY IMPORTS
+# ============================================================
 
 import shutil
 import uuid
-from pathlib import Path
+
 from collections import defaultdict, deque
+from datetime import datetime, timezone
+from pathlib import Path
 from time import monotonic
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+
+
+# ============================================================
+# 2. THIRD-PARTY IMPORTS
+# ============================================================
+
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+
 from pydantic import BaseModel, EmailStr, Field
+
 from sqlalchemy.orm import Session
+
+
+# ============================================================
+# 3. INTERNAL PROJECT IMPORTS
+# ============================================================
 
 from core.auth import (
     create_access_token,
@@ -27,26 +57,42 @@ from core.auth import (
     hash_password,
     verify_password,
 )
+
 from core.config import settings
 from core.database import Base, engine, get_db
 from core.document_loader import load_and_chunk_pdf
-from core.models import User
+
+from core.models import User, Conversation, Message
+
 from core.rag_chain import answer_question
 from core.vector_store import vector_store
+
+
+# ============================================================
+# 4. APPLICATION CONFIGURATION
+# ============================================================
+
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
 MAX_DOCUMENTS_PER_USER = 20
+
 app = FastAPI(
     title="Enterprise RAG Engine",
-    description="Multi-tenant document QA powered by Gemini + ChromaDB",
-    version="2.0.0",
+    description=(
+        "Multi-tenant document QA powered by "
+        "Gemini, ChromaDB, and persistent conversations."
+    ),
+    version="2.1.0",
 )
 
-# --- CORS: allow the frontend to communicate with this API ---
+
+# ============================================================
+# 5. CORS CONFIGURATION
+# ============================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        # Add your deployed Vercel frontend URL here later.
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
@@ -54,8 +100,16 @@ app.add_middleware(
 )
 
 
+# ============================================================
+# 6. RATE LIMITING
+# ============================================================
+
 _RATE_LIMIT_WINDOW_SECONDS = 60
-_rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
+_rate_limit_events: dict[
+    tuple[str, str],
+    deque[float]
+] = defaultdict(deque)
 
 
 def rate_limit(max_requests: int):
@@ -67,7 +121,9 @@ def rate_limit(max_requests: int):
             if request.client is not None
             else "unknown"
         )
+
         key = (client_ip, request.url.path)
+
         now = monotonic()
         events = _rate_limit_events[key]
 
@@ -85,6 +141,7 @@ def rate_limit(max_requests: int):
                     - (now - events[0])
                 ),
             )
+
             raise HTTPException(
                 status_code=429,
                 detail=(
@@ -98,17 +155,27 @@ def rate_limit(max_requests: int):
 
     return dependency
 
-# Creates the users table on startup if it doesn't exist (no-op otherwise).
+
+# ============================================================
+# 7. DATABASE INITIALIZATION
+# ============================================================
+
+# User, Conversation, and Message models must be imported
+# before creating tables.
+
 Base.metadata.create_all(bind=engine)
 
 
-# --- Pydantic schemas ---
+# ============================================================
+# 8. PYDANTIC SCHEMAS
+# ============================================================
+
+# ---------- Authentication schemas ----------
 
 class RegisterRequest(BaseModel):
-    email: EmailStr  # rejects anything that isn't a valid email (422)
-    # Min 8 for basic strength; max 72 because bcrypt only uses the
-    # first 72 bytes of a password.
+    email: EmailStr
     password: str = Field(min_length=8, max_length=72)
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -120,9 +187,7 @@ class UserResponse(BaseModel):
     email: str
 
 
-class QueryRequest(BaseModel):
-    question: str
-
+# ---------- Document schemas ----------
 
 class SourceMetadata(BaseModel):
     source: str
@@ -130,15 +195,10 @@ class SourceMetadata(BaseModel):
     snippet: str
 
 
-class QueryResponse(BaseModel):
-    answer: str
-    sources: list[SourceMetadata]
-
-
 class UploadResponse(BaseModel):
     filename: str
     chunks_added: int
-    total_chunks_in_store: int  # this user's chunks only
+    total_chunks_in_store: int
 
 
 class DocumentItem(BaseModel):
@@ -153,73 +213,176 @@ class DocumentsResponse(BaseModel):
     total: int
 
 
-# --- Public endpoints ---
+# ---------- Conversation schemas ----------
 
-@app.post("/register", response_model=UserResponse, status_code=201)
-async def register(request: RegisterRequest, db: Session = Depends(get_db)):
-    """Creates an account. Stores only a bcrypt hash, never the password."""
+class CreateConversationRequest(BaseModel):
+    title: str | None = None
+
+
+class ConversationSummary(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageResponse(BaseModel):
+    id: int
+    role: str
+    content: str
+    sources: list[SourceMetadata] | None = None
+    created_at: datetime
+
+
+class ConversationDetail(ConversationSummary):
+    messages: list[MessageResponse]
+
+
+# ---------- RAG query schemas ----------
+
+class QueryRequest(BaseModel):
+    question: str
+    conversation_id: int | None = None
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    sources: list[SourceMetadata]
+    conversation_id: int
+
+
+# ============================================================
+# 9. PUBLIC AUTHENTICATION ENDPOINTS
+# ============================================================
+
+@app.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db),
+):
+    """Register a new user."""
+
     email = request.email.lower()
 
-    if db.query(User).filter(User.email == email).first():
-        raise HTTPException(status_code=400, detail="Email already registered.")
+    existing_user = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered.",
+        )
 
     new_user = User(
         email=email,
         hashed_password=hash_password(request.password),
     )
+
     db.add(new_user)
     db.commit()
-    db.refresh(new_user)  # loads the DB-generated id
-    return UserResponse(id=new_user.id, email=new_user.email)
-@app.post("/login", 
-response_model=TokenResponse,
-dependencies=[Depends(rate_limit(10))])
+    db.refresh(new_user)
+
+    return UserResponse(
+        id=new_user.id,
+        email=new_user.email,
+    )
+
+
+@app.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit(10))],
+)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    """
-    Verifies credentials and issues a JWT.
+    """Authenticate a user and issue a JWT."""
 
-    Uses the standard OAuth2 password form so Swagger's "Authorize"
-    button works. The form's `username` field carries the EMAIL.
-    """
-    user = db.query(User).filter(User.email == form_data.username.strip().lower()).first()
+    user = (
+        db.query(User)
+        .filter(
+            User.email == form_data.username.strip().lower()
+        )
+        .first()
+    )
 
-    # One generic error for "no such user" and "wrong password" so
-    # attackers can't enumerate which emails are registered.
     invalid_credentials = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Incorrect email or password.",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    if not user or not verify_password(form_data.password, user.hashed_password):
+
+    if (
+        not user
+        or not verify_password(
+            form_data.password,
+            user.hashed_password,
+        )
+    ):
         raise invalid_credentials
 
-    return TokenResponse(access_token=create_access_token(data={"sub": user.email}))
+    access_token = create_access_token(
+        data={"sub": user.email}
+    )
 
+    return TokenResponse(
+        access_token=access_token,
+    )
+
+
+# ============================================================
+# 10. PUBLIC HEALTH ENDPOINT
+# ============================================================
 
 @app.get("/health")
 async def health_check():
-    """Public liveness check. Deliberately exposes no tenant data."""
+    """Public application health check."""
+
     return {"status": "ok"}
 
 
-# --- Protected endpoints (valid Bearer token required) ---
+# ============================================================
+# 11. PROTECTED USER ENDPOINTS
+# ============================================================
 
-@app.get("/me", response_model=UserResponse)
-async def read_me(current_user: User = Depends(get_current_user)):
-    """Returns the logged-in user. Handy for verifying a token works."""
-    return UserResponse(id=current_user.id, email=current_user.email)
+@app.get(
+    "/me",
+    response_model=UserResponse,
+)
+async def read_me(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the currently authenticated user."""
+
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+    )
 
 
-@app.get("/documents", response_model=DocumentsResponse)
+# ============================================================
+# 12. DOCUMENT MANAGEMENT ENDPOINTS
+# ============================================================
+
+@app.get(
+    "/documents",
+    response_model=DocumentsResponse,
+)
 async def list_user_documents(
     current_user: User = Depends(get_current_user),
 ):
     """List only the authenticated user's documents."""
+
     documents = vector_store.list_documents(
-        user_id=current_user.id
+        user_id=current_user.id,
     )
 
     return DocumentsResponse(
@@ -234,6 +397,7 @@ async def delete_user_document(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a document belonging to the authenticated user."""
+
     deleted = vector_store.delete_document(
         document_id=document_id,
         user_id=current_user.id,
@@ -251,23 +415,117 @@ async def delete_user_document(
     }
 
 
-@app.post("/upload-pdf", 
-          response_model=UploadResponse,
-          dependencies=[Depends(rate_limit(10))])
+# ============================================================
+# 13. CONVERSATION MANAGEMENT ENDPOINTS
+# ============================================================
+
+@app.post(
+    "/conversations",
+    response_model=ConversationSummary,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_conversation(
+    request: CreateConversationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a new conversation for the authenticated user."""
+
+    title = (request.title or "New conversation").strip()
+
+    conversation = Conversation(
+        user_id=current_user.id,
+        title=title[:200] or "New conversation",
+    )
+
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+
+    return conversation
+
+
+@app.get(
+    "/conversations",
+    response_model=list[ConversationSummary],
+)
+async def list_conversations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List the authenticated user's conversations."""
+
+    conversations = (
+        db.query(Conversation)
+        .filter(
+            Conversation.user_id == current_user.id
+        )
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+
+    return conversations
+
+
+@app.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationDetail,
+)
+async def get_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve a conversation and its messages."""
+
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "created_at": conversation.created_at,
+        "updated_at": conversation.updated_at,
+        "messages": conversation.messages,
+    }
+
+
+# ============================================================
+# 14. PDF UPLOAD ENDPOINT
+# ============================================================
+
+@app.post(
+    "/upload-pdf",
+    response_model=UploadResponse,
+    dependencies=[Depends(rate_limit(10))],
+)
 async def upload_pdf(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Ingests a PDF into the CURRENT USER's private document space."""
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    """Upload and ingest a PDF into the user's document space."""
 
-    # Path(...).name strips any directory parts a client might smuggle
-    # into the filename (e.g. "../../x.pdf"); the UUID prefix prevents
-    # collisions between uploads with the same name.
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are supported.",
+        )
+
     original_name = Path(file.filename).name
-    
-    # Check the uploaded file size before saving or processing it.
+
+    # Check uploaded file size.
     file.file.seek(0, 2)
     upload_size = file.file.tell()
     file.file.seek(0)
@@ -278,9 +536,9 @@ async def upload_pdf(
             detail="PDF exceeds the 10 MB upload limit.",
         )
 
-    # Enforce the per-user document limit.
+    # Enforce per-user document limit.
     existing_documents = vector_store.list_documents(
-        user_id=current_user.id
+        user_id=current_user.id,
     )
 
     if len(existing_documents) >= MAX_DOCUMENTS_PER_USER:
@@ -292,7 +550,10 @@ async def upload_pdf(
             ),
         )
 
-    save_path: Path = settings.DATA_DIR / f"{uuid.uuid4().hex}_{original_name}"
+    save_path = (
+        settings.DATA_DIR
+        / f"{uuid.uuid4().hex}_{original_name}"
+    )
 
     try:
         with save_path.open("wb") as buffer:
@@ -301,46 +562,190 @@ async def upload_pdf(
         file.file.close()
 
     try:
-        chunks, metadatas, ids = load_and_chunk_pdf(str(save_path))
+        chunks, metadatas, ids = load_and_chunk_pdf(
+            str(save_path)
+        )
 
-        # Keep a stable internal ID and the original display filename.
         for metadata in metadatas:
             metadata["document_id"] = save_path.name
             metadata["original_filename"] = original_name
+
         if not chunks:
             raise HTTPException(
                 status_code=422,
-                detail="No extractable text found in this PDF (it may be scanned/image-only).",
+                detail=(
+                    "No extractable text found in this PDF "
+                    "(it may be scanned/image-only)."
+                ),
             )
 
-        # user_id comes from the verified token, never from the client.
-        vector_store.add_documents(chunks, metadatas, ids, user_id=current_user.id)
+        vector_store.add_documents(
+            chunks,
+            metadatas,
+            ids,
+            user_id=current_user.id,
+        )
+
     except HTTPException:
         raise
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process PDF: {str(e)}",
+        )
 
     return UploadResponse(
         filename=original_name,
         chunks_added=len(chunks),
-        total_chunks_in_store=vector_store.document_count(user_id=current_user.id),
+        total_chunks_in_store=vector_store.document_count(
+            user_id=current_user.id
+        ),
     )
 
 
-@app.post("/query",
-           response_model=QueryResponse,
-           dependencies=[Depends(rate_limit(10))])
+# ============================================================
+# 15. RAG QUERY + MULTI-TURN CONVERSATION ENDPOINT
+# ============================================================
+
+@app.post(
+    "/query",
+    response_model=QueryResponse,
+    dependencies=[Depends(rate_limit(10))],
+)
 async def query_documents(
     request: QueryRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Answers a question using ONLY the current user's documents."""
-    if not request.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    """
+    Answer a question using the user's documents.
+
+    Conversation history is loaded from SQLite and supplied
+    to the RAG pipeline for contextual follow-up questions.
+    """
+
+    question = request.question.strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty.",
+        )
+
+    # --------------------------------------------------------
+    # A. Load existing conversation or create a new one
+    # --------------------------------------------------------
+
+    if request.conversation_id is not None:
+
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == request.conversation_id,
+                Conversation.user_id == current_user.id,
+            )
+            .first()
+        )
+
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found.",
+            )
+
+    else:
+        conversation = Conversation(
+            user_id=current_user.id,
+            title=question[:60],
+        )
+
+        db.add(conversation)
+        db.flush()
+
+    # --------------------------------------------------------
+    # B. Load the previous 10 messages
+    # --------------------------------------------------------
+
+    previous_messages = (
+        db.query(Message)
+        .filter(
+            Message.conversation_id == conversation.id
+        )
+        .order_by(
+            Message.created_at.desc(),
+            Message.id.desc(),
+        )
+        .limit(10)
+        .all()
+    )
+
+    # Restore chronological order.
+    previous_messages.reverse()
+
+    conversation_history = [
+        {
+            "role": message.role,
+            "content": message.content,
+        }
+        for message in previous_messages
+    ]
+
+    # --------------------------------------------------------
+    # C. Generate a grounded answer using RAG
+    # --------------------------------------------------------
 
     try:
-        result = answer_question(request.question, user_id=current_user.id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate answer: {str(e)}")
+        result = answer_question(
+            question,
+            user_id=current_user.id,
+            conversation_history=conversation_history,
+        )
 
-    return QueryResponse(answer=result["answer"], sources=result["sources"])
+        # ----------------------------------------------------
+        # D. Save the user's question
+        # ----------------------------------------------------
+
+        user_message = Message(
+            conversation_id=conversation.id,
+            role="user",
+            content=question,
+        )
+
+        db.add(user_message)
+
+        # ----------------------------------------------------
+        # E. Save the assistant's answer and citations
+        # ----------------------------------------------------
+
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=result["answer"],
+            sources=result["sources"],
+        )
+
+        db.add(assistant_message)
+
+        # Update conversation title if it is still the default.
+        if conversation.title == "New conversation":
+            conversation.title = question[:60]
+
+        conversation.updated_at = datetime.now(timezone.utc)
+
+        # Commit both messages together.
+        db.commit()
+
+        return QueryResponse(
+            answer=result["answer"],
+            sources=result["sources"],
+            conversation_id=conversation.id,
+        )
+
+    except Exception as e:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate answer: {str(e)}",
+        )

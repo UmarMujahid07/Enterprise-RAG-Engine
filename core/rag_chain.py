@@ -45,8 +45,14 @@ generation_model = genai.GenerativeModel(settings.GENERATION_MODEL_NAME)
 
 
 
-def _build_grounded_prompt(question: str, retrieved_chunks: list[str], metadatas: list[dict]) -> str:
-    """Build a grounded prompt using retrieved document context."""
+
+def _build_grounded_prompt(
+    question: str,
+    retrieved_chunks: list[str],
+    metadatas: list[dict],
+    conversation_history: list[dict] | None = None,
+) -> str:
+    """Build a grounded prompt with optional conversation history."""
 
     context_sections = []
 
@@ -62,35 +68,53 @@ def _build_grounded_prompt(question: str, retrieved_chunks: list[str], metadatas
 
     context_block = "\n\n".join(context_sections)
 
+    history_block = "No previous conversation."
+
+    if conversation_history:
+        history_block = "\n".join(
+            f"{message['role'].upper()}: {message['content']}"
+            for message in conversation_history
+        )
+
     prompt = f"""You are an enterprise document question-answering assistant.
 
 Your task is to answer the user's question using the provided document excerpts.
 
+CONVERSATION HISTORY:
+{history_block}
+
 INSTRUCTIONS:
-1. Carefully read ALL the provided excerpts before answering.
-2. Combine relevant information from multiple excerpts when necessary.
-3. Answer questions about summaries, main topics, key points, definitions, and explanations whenever the information is present in the excerpts.
-4. Do not refuse simply because the answer is spread across multiple pages or excerpts.
-5. Do not use outside knowledge or invent facts that are not supported by the excerpts.
-6. Cite supporting information using this exact format: (Source: filename, Page: X).
-7. If only part of the question can be answered, answer that part and clearly mention what information is missing.
-8. Only use the refusal response if the excerpts genuinely contain no information relevant to the question.
-9. Use clear headings or bullet points when they improve readability.
+1. Carefully read ALL the provided document excerpts.
+2. Use conversation history to understand follow-up questions and references such as "it", "that", or "explain more".
+3. Treat the latest user question as the question you must answer.
+4. Conversation history provides context only. Do not treat previous assistant answers as verified facts.
+5. Ground factual answers ONLY in the current document excerpts.
+6. Combine relevant information from multiple excerpts when necessary.
+7. Do not use outside knowledge or invent facts.
+8. Cite supporting information using this exact format: (Source: filename, Page: X).
+9. If only part of the question can be answered, answer that part and clearly mention what information is missing.
+10. Only refuse if the excerpts genuinely contain no information relevant to the question.
+11. Use clear headings or bullet points when helpful.
 
 DOCUMENT EXCERPTS:
 {context_block}
 
-USER QUESTION:
+LATEST USER QUESTION:
 {question}
 
 GROUNDED ANSWER:"""
 
     return prompt
 
+
 REFUSAL_TEXT = "I don't have enough information in the provided documents to answer this."
 
 
-def answer_question(question: str, user_id: int) -> dict:
+def answer_question(
+    question: str,
+    user_id: int,
+    conversation_history: list[dict] | None = None,
+) -> dict:
     """
     Full RAG pipeline, scoped to one user's documents:
     embed question -> retrieve THIS user's chunks -> grounded answer.
@@ -119,7 +143,12 @@ def answer_question(question: str, user_id: int) -> dict:
             "sources": [],
         }
 
-    prompt = _build_grounded_prompt(question, retrieved_chunks, retrieved_metadatas)
+    prompt = _build_grounded_prompt(
+        question,
+        retrieved_chunks,
+        retrieved_metadatas,
+        conversation_history,
+    )
     response = generation_model.generate_content(prompt)
     response_text = response.text.strip()
 

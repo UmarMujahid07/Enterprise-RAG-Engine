@@ -6,14 +6,151 @@ import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+// ============================================================
+// TYPES
+// ============================================================
+
+type Source = {
+    source: string;
+    page: number;
+    snippet: string;
+};
+
+type ChatMessage = {
+    id: number;
+    role: "user" | "assistant";
+    content: string;
+    sources?: Source[] | null;
+};
+
+type Conversation = {
+    id: number;
+    title: string;
+    created_at: string;
+    updated_at: string;
+};
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+
 export default function Home() {
     const router = useRouter();
+
+    // ---------- State ----------
+
+    const [question, setQuestion] = useState("");
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+    const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [conversationId, setConversationId] = useState<number | null>(null);
+
+    const [asking, setAsking] = useState(false);
+    const [loadingHistory, setLoadingHistory] = useState(false);
+
+    const [queryError, setQueryError] = useState("");
+    const [userEmail, setUserEmail] = useState("");
+
+    const [documentCount, setDocumentCount] = useState<number | null>(null);
+
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [uploading, setUploading] = useState(false);
+    const [uploadMessage, setUploadMessage] = useState("");
+    const [uploadError, setUploadError] = useState("");
+
+    const [authChecking, setAuthChecking] = useState(true);
+
+    // ---------- Authentication ----------
 
     const handleLogout = () => {
         localStorage.removeItem("rag_access_token");
         localStorage.removeItem("rag_user_email");
         window.location.replace("/login");
     };
+
+    // ---------- Load Conversations ----------
+
+    const loadConversations = async () => {
+        const token = localStorage.getItem("rag_access_token");
+
+        if (!token) return;
+
+        try {
+            const response = await fetch(
+                "http://127.0.0.1:8000/conversations",
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                }
+            );
+
+            if (!response.ok) return;
+
+            const data: Conversation[] = await response.json();
+            setConversations(data);
+        } catch (error) {
+            console.error("Failed to load conversations:", error);
+        }
+    };
+
+    // ---------- Start New Chat ----------
+
+    const startNewChat = () => {
+        if (asking) return;
+
+        setConversationId(null);
+        setMessages([]);
+        setQuestion("");
+        setQueryError("");
+    };
+
+    // ---------- Open Existing Conversation ----------
+
+    const openConversation = async (id: number) => {
+        const token = localStorage.getItem("rag_access_token");
+
+        if (!token) {
+            router.replace("/login");
+            return;
+        }
+
+        if (asking) return;
+
+        setLoadingHistory(true);
+        setQueryError("");
+
+        try {
+            const response = await fetch(
+                `http://127.0.0.1:8000/conversations/${id}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                setQueryError(
+                    data.detail || "Could not load conversation."
+                );
+                return;
+            }
+
+            setConversationId(data.id);
+            setMessages(data.messages || []);
+            setQuestion("");
+        } catch {
+            setQueryError("Could not connect to the backend.");
+        } finally {
+            setLoadingHistory(false);
+        }
+    };
+
+    // ---------- PDF Upload ----------
+
     const handleUpload = async () => {
         if (!selectedFile) {
             setUploadError("Please select a PDF file first.");
@@ -40,23 +177,27 @@ export default function Home() {
         formData.append("file", selectedFile);
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/upload-pdf", {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                },
-                body: formData,
-            });
+            const response = await fetch(
+                "http://127.0.0.1:8000/upload-pdf",
+                {
+                    method: "POST",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: formData,
+                }
+            );
 
-            const result: { detail?: string; message?: string } =
-                await response.json().catch(() => ({}));
+            const result = await response.json().catch(() => ({}));
 
             if (!response.ok) {
                 setUploadError(result.detail || "PDF upload failed.");
                 return;
             }
 
-            setUploadMessage(result.message || "PDF uploaded successfully!");
+            setUploadMessage(
+                result.message || "PDF uploaded successfully!"
+            );
 
             const documentsResponse = await fetch(
                 "http://127.0.0.1:8000/documents",
@@ -74,14 +215,20 @@ export default function Home() {
 
             setSelectedFile(null);
         } catch {
-            setUploadError("Could not connect to the backend. Please try again.");
+            setUploadError(
+                "Could not connect to the backend. Please try again."
+            );
         } finally {
             setUploading(false);
         }
     };
 
+    // ---------- Ask Question ----------
+
     const handleAskQuestion = async () => {
-        if (!question.trim()) return;
+        const currentQuestion = question.trim();
+
+        if (!currentQuestion || asking) return;
 
         const token = localStorage.getItem("rag_access_token");
 
@@ -90,56 +237,87 @@ export default function Home() {
             return;
         }
 
+        const previousMessages = messages;
+
+        const temporaryUserMessage: ChatMessage = {
+            id: Date.now(),
+            role: "user",
+            content: currentQuestion,
+        };
+
         setAsking(true);
-        setAnswer("");
-        setSources([]);
         setQueryError("");
+        setQuestion("");
+
+        setMessages((previous) => [
+            ...previous,
+            temporaryUserMessage,
+        ]);
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/query", {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    question: question.trim(),
-                }),
-            });
+            const response = await fetch(
+                "http://127.0.0.1:8000/query",
+                {
+                    method: "POST",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        question: currentQuestion,
+                        conversation_id: conversationId,
+                    }),
+                }
+            );
 
             const result = await response.json();
-            console.log("RAG API response:", result);
 
             if (!response.ok) {
+                setMessages(previousMessages);
+                setQuestion(currentQuestion);
+
                 setQueryError(
-                    result.detail || "Something went wrong while processing your question."
+                    result.detail ||
+                    "Something went wrong while processing your question."
                 );
                 return;
             }
 
-            setAnswer(result.answer || "");
-            setSources(result.sources || []);
-        } catch {
-            setQueryError("Could not connect to the backend. Please try again.");
+            if (!result.conversation_id) {
+                throw new Error("Backend did not return conversation_id.");
+            }
+
+            const assistantMessage: ChatMessage = {
+                id: Date.now() + 1,
+                role: "assistant",
+                content: result.answer || "",
+                sources: result.sources || [],
+            };
+
+            setConversationId(result.conversation_id);
+
+            setMessages((previous) => [
+                ...previous,
+                assistantMessage,
+            ]);
+
+            await loadConversations();
+
+        } catch (error) {
+            console.error("Query failed:", error);
+
+            setMessages(previousMessages);
+            setQuestion(currentQuestion);
+
+            setQueryError(
+                "Could not get an answer. Please check your backend connection."
+            );
         } finally {
             setAsking(false);
         }
     };
 
-    const [question, setQuestion] = useState("");
-    const [answer, setAnswer] = useState("");
-    const [sources, setSources] = useState<
-        { source: string; page: number; snippet: string }[]
-    >([]);
-    const [asking, setAsking] = useState(false);
-    const [queryError, setQueryError] = useState("");
-    const [userEmail, setUserEmail] = useState("");
-    const [documentCount, setDocumentCount] = useState<number | null>(null);
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
-    const [uploading, setUploading] = useState(false);
-    const [uploadMessage, setUploadMessage] = useState("");
-    const [uploadError, setUploadError] = useState("");
-    const [authChecking, setAuthChecking] = useState(true);
+    // ---------- Verify Session ----------
 
     useEffect(() => {
         async function verifySession() {
@@ -149,14 +327,20 @@ export default function Home() {
                 router.replace("/login");
                 return;
             }
-            setUserEmail(localStorage.getItem("rag_user_email") || "");
+
+            setUserEmail(
+                localStorage.getItem("rag_user_email") || ""
+            );
 
             try {
-                const response = await fetch("http://127.0.0.1:8000/me", {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                });
+                const response = await fetch(
+                    "http://127.0.0.1:8000/me",
+                    {
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                        },
+                    }
+                );
 
                 if (!response.ok) {
                     localStorage.removeItem("rag_access_token");
@@ -175,11 +359,16 @@ export default function Home() {
                 );
 
                 if (documentsResponse.ok) {
-                    const documentsData = await documentsResponse.json();
+                    const documentsData =
+                        await documentsResponse.json();
+
                     setDocumentCount(documentsData.total);
                 }
 
+                await loadConversations();
+
                 setAuthChecking(false);
+
             } catch {
                 localStorage.removeItem("rag_access_token");
                 localStorage.removeItem("rag_user_email");
@@ -190,13 +379,27 @@ export default function Home() {
         verifySession();
     }, [router]);
 
+    // ---------- Loading Screen ----------
+
     if (authChecking) {
-        return <div className="auth-loading">Checking your session...</div>;
+        return (
+            <div className="auth-loading">
+                Checking your session...
+            </div>
+        );
     }
+
+    // ============================================================
+    // UI
+    // ============================================================
 
     return (
         <main className="dashboard">
+
+            {/* SIDEBAR */}
+
             <aside className="sidebar">
+
                 <div className="brand">
                     <div className="brand-icon">R</div>
                     <div>
@@ -206,53 +409,143 @@ export default function Home() {
                 </div>
 
                 <p className="nav-label">WORKSPACE</p>
+
                 <nav className="navigation">
-                    <a className="nav-item active" href="#overview">▦ Overview</a>
-                    <a className="nav-item" href="#documents">▤ Documents</a>
-                    <a className="nav-item" href="#assistant">✳ AI Assistant</a>
+                    <a className="nav-item active" href="#overview">
+                        ▦ Overview
+                    </a>
+
+                    <a className="nav-item" href="#documents">
+                        ▤ Documents
+                    </a>
+
+                    <a className="nav-item" href="#assistant">
+                        ✳ AI Assistant
+                    </a>
                 </nav>
+
+                {/* NEW CHAT */}
+
+                <button
+                    type="button"
+                    className="new-chat-button"
+                    onClick={startNewChat}
+                    disabled={asking}
+                >
+                    + New Chat
+                </button>
+
+                {/* CONVERSATION HISTORY */}
+
+                <p className="nav-label">CONVERSATIONS</p>
+
+                <div className="conversation-list">
+
+                    {conversations.map((conversation) => (
+                        <button
+                            key={conversation.id}
+                            type="button"
+                            className={`conversation-item ${
+                                conversationId === conversation.id
+                                    ? "active"
+                                    : ""
+                            }`}
+                            onClick={() =>
+                                openConversation(conversation.id)
+                            }
+                            disabled={asking || loadingHistory}
+                            title={conversation.title}
+                        >
+                            {conversation.title}
+                        </button>
+                    ))}
+
+                    {conversations.length === 0 && (
+                        <p className="file-note">
+                            No previous conversations.
+                        </p>
+                    )}
+
+                </div>
 
                 <div className="sidebar-bottom">
                     <div className="status-dot" />
                     <span>RAG workspace</span>
                     <small>Local environment</small>
                 </div>
+
             </aside>
 
+            {/* MAIN CONTENT */}
+
             <section className="main-content" id="overview">
+
+                {/* HEADER */}
+
                 <header className="topbar">
+
                     <div>
-                        <p className="eyebrow">WORKSPACE / OVERVIEW</p>
+                        <p className="eyebrow">
+                            WORKSPACE / OVERVIEW
+                        </p>
                         <h1>Knowledge Dashboard</h1>
                     </div>
+
                     <div className="topbar-actions">
-                        <span className="user-email">{userEmail}</span>
+
+                        <span className="user-email">
+                            {userEmail}
+                        </span>
 
                         <div className="user-avatar">
-                            {(userEmail || "U").charAt(0).toUpperCase()}
+                            {(userEmail || "U")
+                                .charAt(0)
+                                .toUpperCase()}
                         </div>
 
-                        <button className="logout-button" onClick={handleLogout}>
+                        <button
+                            className="logout-button"
+                            onClick={handleLogout}
+                        >
                             Log out
                         </button>
+
                     </div>
+
                 </header>
 
+                {/* WELCOME */}
+
                 <section className="welcome">
+
                     <div>
-                        <p className="eyebrow light">YOUR KNOWLEDGE, CONNECTED</p>
-                        <h2>Ask your documents<br />anything.</h2>
-                        <p>
-                            Search your knowledge base and get answers grounded in your
-                            documents, with source references.
+                        <p className="eyebrow light">
+                            YOUR KNOWLEDGE, CONNECTED
                         </p>
-                        <a className="primary-button" href="#assistant">
+
+                        <h2>
+                            Ask your documents
+                            <br />
+                            anything.
+                        </h2>
+
+                        <p>
+                            Search your knowledge base and get answers
+                            grounded in your documents, with source references.
+                        </p>
+
+                        <a
+                            className="primary-button"
+                            href="#assistant"
+                        >
                             Ask a question <span>→</span>
                         </a>
                     </div>
+
                     <div className="welcome-art" aria-hidden="true">
                         <div className="orbit orbit-one" />
                         <div className="orbit orbit-two" />
+
                         <div className="document-illustration">
                             <div className="doc-fold" />
                             <span>AI</span>
@@ -260,59 +553,94 @@ export default function Home() {
                             <i />
                             <i />
                         </div>
-                        <div className="floating-chip">✳ Semantic search</div>
+
+                        <div className="floating-chip">
+                            ✳ Semantic search
+                        </div>
                     </div>
+
                 </section>
 
-                <section className="stats-grid" aria-label="Workspace statistics">
+                {/* STATISTICS */}
+
+                <section
+                    className="stats-grid"
+                    aria-label="Workspace statistics"
+                >
+
                     <article className="stat-card">
                         <span className="stat-icon purple">▤</span>
                         <p>Documents indexed</p>
-                        <h3>{documentCount === null ? "Loading..." : documentCount}</h3>
+                        <h3>
+                            {documentCount === null
+                                ? "Loading..."
+                                : documentCount}
+                        </h3>
                         <small>Your uploaded documents</small>
                     </article>
+
                     <article className="stat-card">
                         <span className="stat-icon green">✳</span>
                         <p>AI answers</p>
                         <h3>Ready</h3>
                         <small>Grounded in your documents</small>
                     </article>
+
                     <article className="stat-card">
                         <span className="stat-icon orange">⌁</span>
                         <p>Knowledge retrieval</p>
-                        <h3>Active UI</h3>
-                        <small>Backend connection comes next</small>
+                        <h3>Active</h3>
+                        <small>Backend connected</small>
                     </article>
+
                 </section>
 
+                {/* CONTENT */}
+
                 <div className="content-grid">
-                    <section className="panel upload-panel" id="documents">
+
+                    {/* DOCUMENT UPLOAD */}
+
+                    <section
+                        className="panel upload-panel"
+                        id="documents"
+                    >
+
                         <div className="panel-heading">
                             <div>
-                                <p className="eyebrow">KNOWLEDGE BASE</p>
+                                <p className="eyebrow">
+                                    KNOWLEDGE BASE
+                                </p>
                                 <h2>Documents</h2>
                             </div>
+
                             <span className="subtle-tag">PDF</span>
                         </div>
 
                         <div className="upload-zone">
+
                             <div className="upload-icon">↑</div>
 
                             <h3>Upload your documents</h3>
 
                             <p>
-                                Select a PDF document to add it to your knowledge base.
+                                Select a PDF document to add it to your
+                                knowledge base.
                             </p>
 
                             <label className="upload-button">
-                                {selectedFile ? "Change PDF" : "Choose PDF"}
+                                {selectedFile
+                                    ? "Change PDF"
+                                    : "Choose PDF"}
 
                                 <input
                                     type="file"
                                     accept=".pdf,application/pdf"
                                     hidden
-                                    onChange={(e) => {
-                                        const file = e.target.files?.[0] || null;
+                                    onChange={(event) => {
+                                        const file =
+                                            event.target.files?.[0] || null;
+
                                         setSelectedFile(file);
                                         setUploadMessage("");
                                         setUploadError("");
@@ -328,17 +656,23 @@ export default function Home() {
 
                             {selectedFile && (
                                 <button
+                                    type="button"
                                     className="upload-button"
                                     onClick={handleUpload}
                                     disabled={uploading}
                                 >
-                                    {uploading ? "Uploading..." : "Upload PDF"}
+                                    {uploading
+                                        ? "Uploading..."
+                                        : "Upload PDF"}
                                 </button>
                             )}
 
                             {uploadMessage && (
                                 <div className="upload-success">
-                                    <span className="upload-success-icon">✓</span>
+                                    <span className="upload-success-icon">
+                                        ✓
+                                    </span>
+
                                     <div>
                                         <strong>Upload complete</strong>
                                         <p>{uploadMessage}</p>
@@ -347,66 +681,209 @@ export default function Home() {
                             )}
 
                             {uploadError && (
-                                <div className="upload-error" role="alert">
-                                    <span className="upload-error-icon">!</span>
+                                <div
+                                    className="upload-error"
+                                    role="alert"
+                                >
+                                    <span className="upload-error-icon">
+                                        !
+                                    </span>
+
                                     <div>
                                         <strong>Upload failed</strong>
                                         <p>{uploadError}</p>
                                     </div>
                                 </div>
                             )}
+
                             {!selectedFile && (
-                                <span className="file-note">PDF files only · Maximum 10 MB</span>
+                                <span className="file-note">
+                                    PDF files only · Maximum 10 MB
+                                </span>
                             )}
+
                         </div>
 
                         <div className="empty-documents">
                             <span>▤</span>
+
                             <div>
-                                <strong>No live document data yet</strong>
-                                <p>This preview isn't connected to your API yet.</p>
+                                <strong>
+                                    No live document list displayed
+                                </strong>
+
+                                <p>
+                                    Document count is connected to your API.
+                                </p>
                             </div>
                         </div>
+
                     </section>
 
-                    <section className="panel assistant-panel" id="assistant">
+                    {/* AI ASSISTANT */}
+
+                    <section
+                        className="panel assistant-panel"
+                        id="assistant"
+                    >
+
                         <div className="panel-heading">
+
                             <div>
-                                <p className="eyebrow">RETRIEVAL AUGMENTED GENERATION</p>
+                                <p className="eyebrow">
+                                    RETRIEVAL AUGMENTED GENERATION
+                                </p>
                                 <h2>AI Assistant</h2>
                             </div>
-                            <span className="online-tag"><span /> Ready</span>
+
+                            <span className="online-tag">
+                                <span /> Ready
+                            </span>
+
                         </div>
 
+                        {/* CHAT MESSAGES */}
+
                         <div className="chat-area">
-                            <div className="assistant-message">
-                                <div className="assistant-avatar">✳</div>
-                                <div>
-                                    <strong>RAG Assistant</strong>
-                                    <p>
-                                        Hello! Once connected, I can answer questions using your
-                                        uploaded documents and show the supporting source passages.
-                                    </p>
+
+                            {loadingHistory && (
+                                <p>Loading conversation...</p>
+                            )}
+
+                            {!loadingHistory &&
+                                messages.length === 0 && (
+                                    <>
+                                        <div className="assistant-message">
+                                            <div className="assistant-avatar">
+                                                ✳
+                                            </div>
+
+                                            <div>
+                                                <strong>RAG Assistant</strong>
+
+                                                <p>
+                                                    Hello! Ask questions using
+                                                    your uploaded documents.
+                                                    Your conversation history
+                                                    will be saved automatically.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="suggestion-label">
+                                            TRY ASKING
+                                        </div>
+
+                                        <button
+                                            className="suggestion"
+                                            type="button"
+                                            onClick={() =>
+                                                setQuestion(
+                                                    "Summarize the key points in my documents."
+                                                )
+                                            }
+                                        >
+                                            Summarize my documents
+                                            <span>↗</span>
+                                        </button>
+
+                                        <button
+                                            className="suggestion"
+                                            type="button"
+                                            onClick={() =>
+                                                setQuestion(
+                                                    "What are the most important findings?"
+                                                )
+                                            }
+                                        >
+                                            Find the most important findings
+                                            <span>↗</span>
+                                        </button>
+                                    </>
+                                )}
+
+                            {messages.map((message) => (
+                                <div
+                                    key={message.id}
+                                    className={
+                                        message.role === "user"
+                                            ? "user-message"
+                                            : "assistant-message"
+                                    }
+                                >
+
+                                    {message.role === "assistant" && (
+                                        <div className="assistant-avatar">
+                                            ✳
+                                        </div>
+                                    )}
+
+                                    <div className="message-content">
+
+                                        <strong>
+                                            {message.role === "user"
+                                                ? "You"
+                                                : "RAG Assistant"}
+                                        </strong>
+
+                                        <div className="answer-content">
+                                            <ReactMarkdown
+                                                remarkPlugins={[remarkGfm]}
+                                            >
+                                                {message.content.replace(
+                                                    /\\([*_`~])/g,
+                                                    "$1"
+                                                )}
+                                            </ReactMarkdown>
+                                        </div>
+
+                                        {message.role === "assistant" &&
+                                            message.sources &&
+                                            message.sources.length > 0 && (
+                                                <div className="sources-section">
+                                                    <h4>Sources</h4>
+
+                                                    {message.sources.map(
+                                                        (source, index) => (
+                                                            <div
+                                                                className="source-item"
+                                                                key={`${source.source}-${source.page}-${index}`}
+                                                            >
+                                                                <div className="source-title">
+                                                                    <span>▤</span>
+
+                                                                    <strong>
+                                                                        {source.source}
+                                                                    </strong>
+
+                                                                    <span className="source-page">
+                                                                        Page {source.page}
+                                                                    </span>
+                                                                </div>
+
+                                                                <p>
+                                                                    {source.snippet}
+                                                                </p>
+                                                            </div>
+                                                        )
+                                                    )}
+                                                </div>
+                                            )}
+
+                                    </div>
+
                                 </div>
-                            </div>
-                            <div className="suggestion-label">TRY ASKING</div>
-                            <button
-                                className="suggestion"
-                                onClick={() =>
-                                    setQuestion("Summarize the key points in my documents.")
-                                }
-                            >
-                                Summarize my documents <span>↗</span>
-                            </button>
-                            <button
-                                className="suggestion"
-                                onClick={() =>
-                                    setQuestion("What are the most important findings?")
-                                }
-                            >
-                                Find the most important findings <span>↗</span>
-                            </button>
+                            ))}
+
+                            {asking && (
+                                <p className="privacy-note">
+                                    RAG Assistant is thinking...
+                                </p>
+                            )}
+
                         </div>
+
+                        {/* QUESTION INPUT */}
 
                         <form
                             className="question-form"
@@ -415,64 +892,57 @@ export default function Home() {
                                 handleAskQuestion();
                             }}
                         >
+
                             <input
                                 value={question}
-                                onChange={(event) => setQuestion(event.target.value)}
+                                onChange={(event) =>
+                                    setQuestion(event.target.value)
+                                }
                                 placeholder="Ask a question about your documents..."
                                 aria-label="Ask a question"
+                                disabled={asking || loadingHistory}
                             />
-                            <button type="submit" disabled={!question.trim() || asking}>
+
+                            <button
+                                type="submit"
+                                disabled={
+                                    !question.trim() ||
+                                    asking ||
+                                    loadingHistory
+                                }
+                            >
                                 {asking ? "..." : "↑"}
                             </button>
+
                         </form>
-                        <p className="privacy-note">Answers will be grounded in retrieved document passages.</p>
+
+                        <p className="privacy-note">
+                            Answers are grounded in retrieved document passages.
+                        </p>
+
                         {queryError && (
-                            <div className="query-error" role="alert">
+                            <div
+                                className="query-error"
+                                role="alert"
+                            >
                                 <strong>Unable to get an answer</strong>
                                 <p>{queryError}</p>
                             </div>
                         )}
 
-                        {answer && (
-                            <div className="answer-card">
-                                <div className="answer-heading">
-                                    <span className="answer-icon">✦</span>
-                                    <strong>AI Assistant</strong>
-                                </div>
-
-                                <div className="answer-content">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {answer.replace(/\\([*_`~])/g, "$1")}
-                                    </ReactMarkdown>
-                                </div>
-
-                                {sources.length > 0 && (
-                                    <div className="sources-section">
-                                        <h4>Sources</h4>
-
-                                        {sources.map((source, index) => (
-                                            <div className="source-item" key={`${source.source}-${source.page}-${index}`}>
-                                                <div className="source-title">
-                                                    <span>▤</span>
-                                                    <strong>{source.source}</strong>
-                                                    <span className="source-page">Page {source.page}</span>
-                                                </div>
-
-                                                <p>{source.snippet}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
                     </section>
+
                 </div>
+
+                {/* FOOTER */}
 
                 <footer className="footer">
                     <span>Enterprise RAG Engine</span>
                     <span>Powered by your knowledge base</span>
                 </footer>
+
             </section>
+
         </main>
     );
 }
