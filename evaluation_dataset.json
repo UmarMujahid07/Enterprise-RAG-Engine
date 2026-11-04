@@ -1,0 +1,40 @@
+
+[
+  {
+    "question": "What is a Process Control Block (PCB)?",
+    "expected_keywords": [
+      "process state",
+      "program counter",
+      "CPU registers",
+      "memory"
+    ],
+    "expected_source": "Process Operating Systems.pdf",
+    "answerable": true
+  },
+  {
+    "question": "What factors are used to calculate QuickRide fares?",
+    "expected_keywords": [
+      "distance",
+      "airport surcharge",
+      "rainy-weather pricing"
+    ],
+    "expected_source": "Assignment 02 - SCD.pdf",
+    "answerable": true
+  },
+  {
+    "question": "What is the purpose of using the same pricing rules in the customer app and admin panel?",
+    "expected_keywords": [
+      "same pricing rules",
+      "customer app",
+      "admin panel"
+    ],
+    "expected_source": "Assignment 02 - SCD.pdf",
+    "answerable": true
+  },
+  {
+    "question": "Who invented the Python programming language?",
+    "expected_keywords": [],
+    "expected_source": null,
+    "answerable": false
+  }
+]

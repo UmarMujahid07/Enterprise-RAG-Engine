@@ -19,7 +19,6 @@ from pydantic_settings import sources
 from core.config import settings
 from core.embedding_function import embed_query
 from core.vector_store import vector_store
-from core.evaluation import evaluate_retrieval, evaluate_citations
 # Reuses the same genai.configure() call made in embedding_function.py —
 # safe to call again, it's idempotent (just resets the API key config).
 genai.configure(api_key=settings.GOOGLE_API_KEY)
@@ -104,14 +103,6 @@ def answer_question(question: str, user_id: int) -> dict:
 
     retrieved_chunks = results["documents"][0]
     # Evaluate retrieval quality
-    retrieval_metrics = evaluate_retrieval(
-        retrieved_documents=retrieved_chunks,
-        expected_keywords=[],
-    )
-
-    print("\n========== EVALUATION ==========")
-    print("Retrieval Metrics:", retrieval_metrics)
-    print("================================")
     print("\n========== RAG DEBUG ==========")
     print("User ID:", user_id)
     print("Retrieved chunks:", len(retrieved_chunks))
@@ -136,12 +127,6 @@ def answer_question(question: str, user_id: int) -> dict:
     if response_text == REFUSAL_TEXT:
         print("CITED PAGES:", cited_pages)
         print("RETURNED SOURCES:", [(s["source"], s["page"]) for s in sources])
-        citation_metrics = evaluate_citations(
-            answer=response_text,
-            sources=sources,
-        )
-
-        print("Citation Metrics:", citation_metrics)
         return {"answer": response_text, "sources": []}
 
     # Return only source + page. Internal fields like user_id must
