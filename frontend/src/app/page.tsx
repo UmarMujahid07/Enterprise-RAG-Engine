@@ -1,385 +1,212 @@
 
-"use client";
+import Link from "next/link";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+const features = [
+  {
+    icon: "⌕",
+    title: "Smart Document Search",
+    description:
+      "Find relevant information across your uploaded documents without searching manually.",
+  },
+  {
+    icon: "✦",
+    title: "AI-Powered Answers",
+    description:
+      "Ask questions in natural language and receive answers grounded in your documents.",
+  },
+  {
+    icon: "▤",
+    title: "Source Citations",
+    description:
+      "See the source document and page number behind your AI-generated answers.",
+  },
+  {
+    icon: "♧",
+    title: "Secure Workspace",
+    description:
+      "Keep your knowledge base private with authenticated, user-specific access.",
+  },
+];
 
-export default function Home() {
-  const router = useRouter();
-
-  const handleLogout = () => {
-    localStorage.removeItem("rag_access_token");
-    localStorage.removeItem("rag_user_email");
-    window.location.replace("/login");
-  };
-  const handleUpload = async () => {
-    if (!selectedFile) {
-      setUploadError("Please select a PDF file first.");
-      return;
-    }
-
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setUploadError("The PDF must be smaller than 10 MB.");
-      return;
-    }
-
-    const token = localStorage.getItem("rag_access_token");
-
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
-    setUploading(true);
-    setUploadMessage("");
-    setUploadError("");
-
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
-    try {
-      const response = await fetch("http://localhost:8000/upload-pdf", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      const result: { detail?: string; message?: string } =
-        await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        setUploadError(result.detail || "PDF upload failed.");
-        return;
-      }
-
-      setUploadMessage(result.message || "PDF uploaded successfully!");
-
-      const documentsResponse = await fetch(
-        "http://localhost:8000/documents",
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (documentsResponse.ok) {
-        const documentsData = await documentsResponse.json();
-        setDocumentCount(documentsData.total);
-      }
-
-      setSelectedFile(null);
-    } catch {
-      setUploadError("Could not connect to the backend. Please try again.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const [question, setQuestion] = useState("");
-  const [userEmail, setUserEmail] = useState("");
-  const [documentCount, setDocumentCount] = useState<number | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState("");
-  const [uploadError, setUploadError] = useState("");
-  const [authChecking, setAuthChecking] = useState(true);
-
-  useEffect(() => {
-    async function verifySession() {
-      const token = localStorage.getItem("rag_access_token");
-
-      if (!token) {
-        router.replace("/login");
-        return;
-      }
-      setUserEmail(localStorage.getItem("rag_user_email") || "");
-
-      try {
-        const response = await fetch("http://localhost:8000/me", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          localStorage.removeItem("rag_access_token");
-          localStorage.removeItem("rag_user_email");
-          router.replace("/login");
-          return;
-        }
-
-        const documentsResponse = await fetch(
-          "http://localhost:8000/documents",
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
-        if (documentsResponse.ok) {
-          const documentsData = await documentsResponse.json();
-          setDocumentCount(documentsData.total);
-        }
-
-        setAuthChecking(false);
-      } catch {
-        localStorage.removeItem("rag_access_token");
-        localStorage.removeItem("rag_user_email");
-        router.replace("/login");
-      }
-    }
-
-    verifySession();
-  }, [router]);
-
-  if (authChecking) {
-    return <div className="auth-loading">Checking your session...</div>;
-  }
-
+export default function LandingPage() {
   return (
-    <main className="dashboard">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon">R</div>
-          <div>
-            <h2>RAG Engine</h2>
-            <span>Enterprise AI</span>
-          </div>
-        </div>
+    <main className="landing-page">
+      <header className="landing-header">
+        <Link href="/" className="landing-brand">
+          <span className="landing-brand-icon">✦</span>
+          <span>Enterprise RAG</span>
+        </Link>
 
-        <p className="nav-label">WORKSPACE</p>
-        <nav className="navigation">
-          <a className="nav-item active" href="#overview">▦ Overview</a>
-          <a className="nav-item" href="#documents">▤ Documents</a>
-          <a className="nav-item" href="#assistant">✳ AI Assistant</a>
+        <nav className="landing-nav">
+          <a href="#features">Features</a>
+          <a href="#how-it-works">How it works</a>
         </nav>
 
-        <div className="sidebar-bottom">
-          <div className="status-dot" />
-          <span>RAG workspace</span>
-          <small>Local environment</small>
+        <div className="landing-header-actions">
+          <Link href="/login" className="landing-login">
+            Log in
+          </Link>
+          <Link href="/login" className="landing-primary-button">
+            Get Started <span>→</span>
+          </Link>
         </div>
-      </aside>
+      </header>
 
-      <section className="main-content" id="overview">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">WORKSPACE / OVERVIEW</p>
-            <h1>Knowledge Dashboard</h1>
-          </div>
-          <div className="topbar-actions">
-            <span className="user-email">{userEmail}</span>
+      <section className="landing-hero">
+        <div className="landing-hero-content">
+          <span className="landing-eyebrow">
+            AI-POWERED DOCUMENT INTELLIGENCE
+          </span>
 
-            <div className="user-avatar">
-              {(userEmail || "U").charAt(0).toUpperCase()}
-            </div>
+          <h1>
+            Turn your documents into{" "}
+            <span>intelligent knowledge.</span>
+          </h1>
 
-            <button className="logout-button" onClick={handleLogout}>
-              Log out
-            </button>
-          </div>
-        </header>
+          <p>
+            Your documents contain valuable knowledge. Make it accessible
+            with AI-powered search, intelligent answers, and reliable
+            source citations.
+          </p>
 
-        <section className="welcome">
-          <div>
-            <p className="eyebrow light">YOUR KNOWLEDGE, CONNECTED</p>
-            <h2>Ask your documents<br />anything.</h2>
-            <p>
-              Search your knowledge base and get answers grounded in your
-              documents, with source references.
-            </p>
-            <a className="primary-button" href="#assistant">
-              Ask a question <span>→</span>
+          <div className="landing-hero-actions">
+            <Link href="/login" className="landing-primary-button">
+              Get Started <span>→</span>
+            </Link>
+
+            <a href="#features" className="landing-secondary-button">
+              Explore Features
             </a>
           </div>
-          <div className="welcome-art" aria-hidden="true">
-            <div className="orbit orbit-one" />
-            <div className="orbit orbit-two" />
-            <div className="document-illustration">
-              <div className="doc-fold" />
-              <span>AI</span>
-              <i />
-              <i />
-              <i />
-            </div>
-            <div className="floating-chip">✳ Semantic search</div>
+
+          <div className="landing-trust-note">
+            <span>✓</span> Your documents. Your knowledge. Your workspace.
           </div>
-        </section>
-
-        <section className="stats-grid" aria-label="Workspace statistics">
-          <article className="stat-card">
-            <span className="stat-icon purple">▤</span>
-            <p>Documents indexed</p>
-            <h3>{documentCount === null ? "Loading..." : documentCount}</h3>
-            <small>Your uploaded documents</small>
-          </article>
-          <article className="stat-card">
-            <span className="stat-icon green">✳</span>
-            <p>AI answers</p>
-            <h3>Ready</h3>
-            <small>Grounded in your documents</small>
-          </article>
-          <article className="stat-card">
-            <span className="stat-icon orange">⌁</span>
-            <p>Knowledge retrieval</p>
-            <h3>Active UI</h3>
-            <small>Backend connection comes next</small>
-          </article>
-        </section>
-
-        <div className="content-grid">
-          <section className="panel upload-panel" id="documents">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">KNOWLEDGE BASE</p>
-                <h2>Documents</h2>
-              </div>
-              <span className="subtle-tag">PDF</span>
-            </div>
-
-            <div className="upload-zone">
-              <div className="upload-icon">↑</div>
-
-              <h3>Upload your documents</h3>
-
-              <p>
-                Select a PDF document to add it to your knowledge base.
-              </p>
-
-              <label className="upload-button">
-                {selectedFile ? "Change PDF" : "Choose PDF"}
-
-                <input
-                  type="file"
-                  accept=".pdf,application/pdf"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setSelectedFile(file);
-                    setUploadMessage("");
-                    setUploadError("");
-                  }}
-                />
-              </label>
-
-              {selectedFile && (
-                <p className="file-note">
-                  Selected: {selectedFile.name}
-                </p>
-              )}
-
-              {selectedFile && (
-                <button
-                  className="upload-button"
-                  onClick={handleUpload}
-                  disabled={uploading}
-                >
-                  {uploading ? "Uploading..." : "Upload PDF"}
-                </button>
-              )}
-
-              {uploadMessage && (
-                <div className="upload-success">
-                  <span className="upload-success-icon">✓</span>
-                  <div>
-                    <strong>Upload complete</strong>
-                    <p>{uploadMessage}</p>
-                  </div>
-                </div>
-              )}
-
-              {uploadError && (
-                <div className="upload-error" role="alert">
-                  <span className="upload-error-icon">!</span>
-                  <div>
-                    <strong>Upload failed</strong>
-                    <p>{uploadError}</p>
-                  </div>
-                </div>
-              )}
-              {!selectedFile && (
-                <span className="file-note">PDF files only · Maximum 10 MB</span>
-              )}
-            </div>
-
-            <div className="empty-documents">
-              <span>▤</span>
-              <div>
-                <strong>No live document data yet</strong>
-                <p>This preview isn't connected to your API yet.</p>
-              </div>
-            </div>
-          </section>
-
-          <section className="panel assistant-panel" id="assistant">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">RETRIEVAL AUGMENTED GENERATION</p>
-                <h2>AI Assistant</h2>
-              </div>
-              <span className="online-tag"><span /> Ready</span>
-            </div>
-
-            <div className="chat-area">
-              <div className="assistant-message">
-                <div className="assistant-avatar">✳</div>
-                <div>
-                  <strong>RAG Assistant</strong>
-                  <p>
-                    Hello! Once connected, I can answer questions using your
-                    uploaded documents and show the supporting source passages.
-                  </p>
-                </div>
-              </div>
-              <div className="suggestion-label">TRY ASKING</div>
-              <button
-                className="suggestion"
-                onClick={() =>
-                  setQuestion("Summarize the key points in my documents.")
-                }
-              >
-                Summarize my documents <span>↗</span>
-              </button>
-              <button
-                className="suggestion"
-                onClick={() =>
-                  setQuestion("What are the most important findings?")
-                }
-              >
-                Find the most important findings <span>↗</span>
-              </button>
-            </div>
-
-            <form
-              className="question-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                alert("We'll connect this question box to your FastAPI /query endpoint in the next stage.");
-              }}
-            >
-              <input
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                placeholder="Ask a question about your documents..."
-                aria-label="Ask a question"
-              />
-              <button type="submit" disabled={!question.trim()}>
-                ↑
-              </button>
-            </form>
-            <p className="privacy-note">Answers will be grounded in retrieved document passages.</p>
-          </section>
         </div>
 
-        <footer className="footer">
-          <span>Enterprise RAG Engine</span>
-          <span>Powered by your knowledge base</span>
-        </footer>
+        <div className="landing-preview">
+          <div className="preview-window">
+            <div className="preview-topbar">
+              <div className="preview-dots">
+                <span />
+                <span />
+                <span />
+              </div>
+              <span>Knowledge Assistant</span>
+            </div>
+
+            <div className="preview-body">
+              <div className="preview-sidebar">
+                <div className="preview-logo">✦</div>
+                <div className="preview-sidebar-item active">▤</div>
+                <div className="preview-sidebar-item">⌕</div>
+                <div className="preview-sidebar-item">⚙</div>
+              </div>
+
+              <div className="preview-main">
+                <span className="preview-label">YOUR KNOWLEDGE BASE</span>
+                <h3>Good morning!</h3>
+                <p>What would you like to know today?</p>
+
+                <div className="preview-document">
+                  <span className="preview-file-icon">PDF</span>
+                  <div>
+                    <strong>Business Documentation.pdf</strong>
+                    <small>Document indexed successfully</small>
+                  </div>
+                  <span className="preview-check">✓</span>
+                </div>
+
+                <div className="preview-question">
+                  <span>Ask a question about your documents...</span>
+                  <span className="preview-send">↑</span>
+                </div>
+
+                <div className="preview-answer">
+                  <span className="preview-ai-icon">✦</span>
+                  <div>
+                    <strong>AI Assistant</strong>
+                    <p>
+                      Ask questions and receive contextual answers
+                      supported by your document sources.
+                    </p>
+                    <small>Sources · Document, Page 12</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="preview-decoration preview-decoration-one" />
+          <div className="preview-decoration preview-decoration-two" />
+        </div>
       </section>
+
+      <section className="landing-features" id="features">
+        <div className="landing-section-heading">
+          <span className="landing-eyebrow">BUILT FOR YOUR KNOWLEDGE</span>
+          <h2>Everything you need to work smarter</h2>
+          <p>
+            A smarter way to organize, search, and understand your
+            business documents.
+          </p>
+        </div>
+
+        <div className="landing-feature-grid">
+          {features.map((feature) => (
+            <article className="landing-feature-card" key={feature.title}>
+              <div className="landing-feature-icon">{feature.icon}</div>
+              <h3>{feature.title}</h3>
+              <p>{feature.description}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="landing-how" id="how-it-works">
+        <div className="landing-section-heading">
+          <span className="landing-eyebrow">SIMPLE WORKFLOW</span>
+          <h2>From documents to answers in three steps</h2>
+        </div>
+
+        <div className="landing-steps">
+          <article>
+            <span className="landing-step-number">01</span>
+            <h3>Upload your documents</h3>
+            <p>Add your PDF documents to your private knowledge base.</p>
+          </article>
+
+          <article>
+            <span className="landing-step-number">02</span>
+            <h3>Let AI understand them</h3>
+            <p>Your documents are processed and indexed for retrieval.</p>
+          </article>
+
+          <article>
+            <span className="landing-step-number">03</span>
+            <h3>Ask and discover</h3>
+            <p>Ask questions and get answers with supporting citations.</p>
+          </article>
+        </div>
+      </section>
+
+      <section className="landing-cta">
+        <span className="landing-eyebrow">READY TO GET STARTED?</span>
+        <h2>Your knowledge deserves a smarter way to work.</h2>
+        <p>Create your account and start exploring your documents with AI.</p>
+        <Link href="/login" className="landing-primary-button">
+          Create Your Account <span>→</span>
+        </Link>
+      </section>
+
+      <footer className="landing-footer">
+        <Link href="/" className="landing-brand">
+          <span className="landing-brand-icon">✦</span>
+          <span>Enterprise RAG</span>
+        </Link>
+        <p>Intelligent document knowledge, made accessible.</p>
+        <span>© 2026 Enterprise RAG Engine</span>
+      </footer>
     </main>
   );
 }

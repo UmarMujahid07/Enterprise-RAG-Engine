@@ -22,6 +22,7 @@ class VectorStore:
             name=settings.COLLECTION_NAME,
             embedding_function=GeminiEmbeddingFunction(),
         )
+        print("COLLECTION CONFIG:", self.collection.configuration)
 
     def add_documents(
         self,
@@ -46,6 +47,21 @@ class VectorStore:
             ids=owned_ids,
         )
 
+    def debug_user_documents(self, user_id: int) -> dict:
+        """Temporary diagnostic method for checking stored metadata."""
+        results = self.collection.get(
+            where={"user_id": user_id},
+            limit=5,
+            include=["metadatas", "documents"],
+        )
+
+        return {
+            "user_id_checked": user_id,
+            "matching_chunks": len(results["ids"]),
+            "sample_metadata": results["metadatas"],
+            "sample_documents": results["documents"],
+        }
+
     def query(self, query_embedding: list[float], user_id: int, n_results: int = None) -> dict:
         """
         Similarity search restricted to ONE user's chunks.
@@ -55,7 +71,8 @@ class VectorStore:
         return self.collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results or settings.TOP_K_RESULTS,
-            where={"user_id": user_id},  # <-- the isolation mechanism
+            where={"user_id": user_id},
+            include=["documents", "metadatas", "distances"],
         )
 
     def document_count(self, user_id: int = None) -> int:

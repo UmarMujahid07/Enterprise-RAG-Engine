@@ -15,10 +15,11 @@ simply not what the user is asking about).
 """
 
 import google.generativeai as genai
+from pydantic_settings import sources
 from core.config import settings
 from core.embedding_function import embed_query
 from core.vector_store import vector_store
-
+from core.evaluation import evaluate_retrieval, evaluate_citations
 # Reuses the same genai.configure() call made in embedding_function.py —
 # safe to call again, it's idempotent (just resets the API key config).
 genai.configure(api_key=settings.GOOGLE_API_KEY)
@@ -44,49 +45,48 @@ def _display_filename(metadata: dict) -> str:
 generation_model = genai.GenerativeModel(settings.GENERATION_MODEL_NAME)
 
 
-def _build_grounded_prompt(question: str, retrieved_chunks: list[str], metadatas: list[dict]) -> str:
-    """
-    Constructs the final prompt sent to Gemini, combining retrieved
-    context with the user's question under strict grounding instructions.
 
-    Why a strict system-style instruction is necessary:
-    LLMs are trained to be helpful by default — meaning if the context
-    doesn't fully answer the question, they'll often "fill in" using
-    their own general knowledge rather than saying "I don't know."
-    For an enterprise document QA tool, an answer that SOUNDS confident
-    but isn't actually grounded in the source document is worse than no
-    answer at all — it's a hallucination risk. This prompt explicitly
-    forbids that behavior.
-    """
-    # Build a numbered context block, tagging each chunk with its
-    # source file and page so the model can (and must) cite them.
+def _build_grounded_prompt(question: str, retrieved_chunks: list[str], metadatas: list[dict]) -> str:
+    """Build a grounded prompt using retrieved document context."""
+
     context_sections = []
-    for i, (chunk, meta) in enumerate(zip(retrieved_chunks, metadatas), start=1):
-        
+
+    for i, (chunk, meta) in enumerate(
+        zip(retrieved_chunks, metadatas), start=1
+    ):
         filename = _display_filename(meta)
+        page = meta.get("page", "Unknown")
+
         context_sections.append(
-            f"[Source {i}: {filename}, Page {meta['page']}]\n{chunk}"
+            f"[Source {i}: {filename}, Page {page}]\n{chunk}"
         )
 
     context_block = "\n\n".join(context_sections)
 
-    prompt = f"""You are a document question-answering assistant. Answer the QUESTION using ONLY the CONTEXT provided below.
+    prompt = f"""You are an enterprise document question-answering assistant.
 
-Rules:
-- If the CONTEXT does not contain enough information to answer, respond exactly: "I don't have enough information in the provided documents to answer this."
-- Do NOT use any outside knowledge, even if you know the answer.
-- Always cite the source and page number(s) you used, in the format (Source: filename, Page: X).
-- Be concise and direct.
+Your task is to answer the user's question using the provided document excerpts.
 
-CONTEXT:
+INSTRUCTIONS:
+1. Carefully read ALL the provided excerpts before answering.
+2. Combine relevant information from multiple excerpts when necessary.
+3. Answer questions about summaries, main topics, key points, definitions, and explanations whenever the information is present in the excerpts.
+4. Do not refuse simply because the answer is spread across multiple pages or excerpts.
+5. Do not use outside knowledge or invent facts that are not supported by the excerpts.
+6. Cite supporting information using this exact format: (Source: filename, Page: X).
+7. If only part of the question can be answered, answer that part and clearly mention what information is missing.
+8. Only use the refusal response if the excerpts genuinely contain no information relevant to the question.
+9. Use clear headings or bullet points when they improve readability.
+
+DOCUMENT EXCERPTS:
 {context_block}
 
-QUESTION:
+USER QUESTION:
 {question}
 
-ANSWER:"""
-    return prompt
+GROUNDED ANSWER:"""
 
+    return prompt
 
 REFUSAL_TEXT = "I don't have enough information in the provided documents to answer this."
 
@@ -103,6 +103,22 @@ def answer_question(question: str, user_id: int) -> dict:
     results = vector_store.query(query_vector, user_id=user_id)
 
     retrieved_chunks = results["documents"][0]
+    # Evaluate retrieval quality
+    retrieval_metrics = evaluate_retrieval(
+        retrieved_documents=retrieved_chunks,
+        expected_keywords=[],
+    )
+
+    print("\n========== EVALUATION ==========")
+    print("Retrieval Metrics:", retrieval_metrics)
+    print("================================")
+    print("\n========== RAG DEBUG ==========")
+    print("User ID:", user_id)
+    print("Retrieved chunks:", len(retrieved_chunks))
+    print("Retrieved metadata:", results["metadatas"][0])
+    print("Retrieved distances:", results.get("distances", [[]])[0])
+    print("First retrieved chunk:", retrieved_chunks[0][:500] if retrieved_chunks else "NONE")
+    print("================================\n")
     retrieved_metadatas = results["metadatas"][0]
 
     # This user hasn't uploaded anything (or has no matching chunks).
@@ -118,23 +134,66 @@ def answer_question(question: str, user_id: int) -> dict:
 
     # No sources on a refusal (retrieved chunks weren't actually used).
     if response_text == REFUSAL_TEXT:
+        print("CITED PAGES:", cited_pages)
+        print("RETURNED SOURCES:", [(s["source"], s["page"]) for s in sources])
+        citation_metrics = evaluate_citations(
+            answer=response_text,
+            sources=sources,
+        )
+
+        print("Citation Metrics:", citation_metrics)
         return {"answer": response_text, "sources": []}
 
     # Return only source + page. Internal fields like user_id must
     # never leak into API responses.
     
     
-    sources = [
-        {
-            "source": _display_filename(metadata),
-            "page": metadata["page"],
-            "snippet": chunk,
-        }
-        for chunk, metadata in zip(
-            retrieved_chunks,
-            retrieved_metadatas,
-        )
-    ]
+   
+    
+    # Extract all page citations from Gemini's answer.
+    citations = re.findall(
+        r"\(Source:\s*(.+?)\)",
+        response_text,
+    )
 
+    cited_pages = set()
+
+    for citation in citations:
+        filename_match = re.match(
+            r"(.+?),\s*Page\s+(\d+)",
+            citation,
+        )
+
+        if not filename_match:
+            continue
+
+        filename = filename_match.group(1).strip()
+        page_numbers = re.findall(
+            r"Page\s+(\d+)",
+            citation,
+        )
+
+        for page_number in page_numbers:
+            cited_pages.add((filename, int(page_number)))
+
+    # Return only cited sources, avoiding duplicate pages.
+    sources = []
+    seen_sources = set()
+
+    for chunk, metadata in zip(retrieved_chunks, retrieved_metadatas):
+        filename = _display_filename(metadata)
+        page = metadata.get("page")
+        source_key = (filename, page)
+
+        if source_key in cited_pages and source_key not in seen_sources:
+            sources.append({
+                "source": filename,
+                "page": page,
+                "snippet": chunk,
+            })
+            seen_sources.add(source_key)
+
+    print("CITED PAGES:", cited_pages)
+    print("RETURNED SOURCES:", [(s["source"], s["page"]) for s in sources])
 
     return {"answer": response_text, "sources": sources}

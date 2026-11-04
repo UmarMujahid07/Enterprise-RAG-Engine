@@ -4,7 +4,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://127.0.0.1:8000";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -79,7 +79,7 @@ async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     localStorage.setItem("rag_access_token", token);
     localStorage.setItem("rag_user_email", email);
 
-    router.push("/");
+    router.push("/dashboard");
   } catch (err) {
     setError(
       err instanceof Error ? err.message : "Something went wrong."
