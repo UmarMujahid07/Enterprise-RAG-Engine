@@ -40,7 +40,17 @@ class Conversation(Base):
         index=True,
     )
     title = Column(String(200), nullable=False, default="New conversation")
+    retrieval_mode = Column(
+    String(30),
+    nullable=False,
+    default="all_documents",
+    )
 
+    ocument_ids = Column(
+    JSON,
+    nullable=False,
+    default=list,
+    )
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
         DateTime(timezone=True),

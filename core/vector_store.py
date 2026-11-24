@@ -62,18 +62,37 @@ class VectorStore:
             "sample_documents": results["documents"],
         }
 
-    def query(self, query_embedding: list[float], user_id: int, n_results: int = None) -> dict:
-        """
-        Similarity search restricted to ONE user's chunks.
-        Takes a pre-computed query embedding (embed_query from Step 2)
-        so the retrieval_query task type is used correctly.
-        """
-        return self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results or settings.TOP_K_RESULTS,
-            where={"user_id": user_id},
-            include=["documents", "metadatas", "distances"],
-        )
+    
+def query(
+    self,
+    query_embedding: list[float],
+    user_id: int,
+    n_results: int = None,
+    document_ids: list[str] | None = None,
+) -> dict:
+    """
+    Search only the authenticated user's documents.
+    If document_ids are provided, restrict search to those documents.
+    Otherwise, search across all documents owned by the user.
+    """
+
+    where_filter = {"user_id": user_id}
+
+    if document_ids:
+        where_filter = {
+            "$and": [
+                {"user_id": user_id},
+                {"document_id": {"$in": document_ids}},
+            ]
+        }
+
+    return self.collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results or settings.TOP_K_RESULTS,
+        where=where_filter,
+        include=["documents", "metadatas", "distances"],
+    )
+
 
     def document_count(self, user_id: int = None) -> int:
         """Total chunks, or only one user's chunks if user_id is given."""

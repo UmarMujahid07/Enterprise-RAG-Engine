@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 
-
+from sqlalchemy import inspect, text
 # ============================================================
 # 2. THIRD-PARTY IMPORTS
 # ============================================================
@@ -83,6 +83,36 @@ app = FastAPI(
     ),
     version="2.1.0",
 )
+def migrate_conversation_columns():
+    inspector = inspect(engine)
+
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("conversations")
+    }
+
+    with engine.begin() as connection:
+        if "retrieval_mode" not in columns:
+            connection.execute(
+                text("""
+                    ALTER TABLE conversations
+                    ADD COLUMN retrieval_mode VARCHAR(30)
+                    NOT NULL DEFAULT 'all_documents'
+                """)
+            )
+
+        if "document_ids" not in columns:
+            connection.execute(
+                text("""
+                    ALTER TABLE conversations
+                    ADD COLUMN document_ids JSON
+                    NOT NULL DEFAULT '[]'
+                """)
+            )
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
+    migrate_conversation_columns()
 
 
 # ============================================================
@@ -197,10 +227,10 @@ class SourceMetadata(BaseModel):
 
 
 class UploadResponse(BaseModel):
+    document_id: str
     filename: str
     chunks_added: int
     total_chunks_in_store: int
-
 
 class DocumentItem(BaseModel):
     id: str
@@ -218,14 +248,17 @@ class DocumentsResponse(BaseModel):
 
 class CreateConversationRequest(BaseModel):
     title: str | None = None
-
+    initial_message: str | None = None
+    retrieval_mode: str = "all_documents"
+    document_ids: list[str] = Field(default_factory=list)
 
 class ConversationSummary(BaseModel):
     id: int
     title: str
+    retrieval_mode: str
+    document_ids: list[str]
     created_at: datetime
     updated_at: datetime
-
 
 class MessageResponse(BaseModel):
     id: int
@@ -240,10 +273,11 @@ class ConversationDetail(ConversationSummary):
 
 
 # ---------- RAG query schemas ----------
-
 class QueryRequest(BaseModel):
     question: str
     conversation_id: int | None = None
+    retrieval_mode: str = "all_documents"
+    document_ids: list[str] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
@@ -431,21 +465,63 @@ async def create_conversation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create a new conversation for the authenticated user."""
+    if request.retrieval_mode not in [
+        "all_documents",
+        "document_specific",
+    ]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid retrieval mode.",
+        )
+
+    selected_ids = list(dict.fromkeys(request.document_ids))
+
+    if request.retrieval_mode == "document_specific":
+        if not selected_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Select at least one document.",
+            )
+
+        user_documents = vector_store.list_documents(
+            user_id=current_user.id
+        )
+        owned_ids = {doc["id"] for doc in user_documents}
+
+        if not set(selected_ids).issubset(owned_ids):
+            raise HTTPException(
+                status_code=404,
+                detail="One or more selected documents were not found.",
+            )
+
+    else:
+        selected_ids = []
 
     title = (request.title or "New conversation").strip()
 
     conversation = Conversation(
         user_id=current_user.id,
         title=title[:200] or "New conversation",
+        retrieval_mode=request.retrieval_mode,
+        document_ids=selected_ids,
     )
 
     db.add(conversation)
+    db.flush()
+
+    if request.initial_message:
+        initial_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=request.initial_message,
+            sources=[],
+        )
+        db.add(initial_message)
+
     db.commit()
     db.refresh(conversation)
 
     return conversation
-
 
 @app.get(
     "/conversations",
@@ -672,10 +748,11 @@ async def upload_pdf(
         )
 
     return UploadResponse(
+        document_id=save_path.name,
         filename=original_name,
         chunks_added=len(chunks),
         total_chunks_in_store=vector_store.document_count(
-            user_id=current_user.id
+        user_id=current_user.id
         ),
     )
 
@@ -709,12 +786,13 @@ async def query_documents(
             detail="Question cannot be empty.",
         )
 
-    # --------------------------------------------------------
+        # --------------------------------------------------------
     # A. Load existing conversation or create a new one
     # --------------------------------------------------------
 
     if request.conversation_id is not None:
 
+        # Existing conversations always use their saved scope.
         conversation = (
             db.query(Conversation)
             .filter(
@@ -731,14 +809,54 @@ async def query_documents(
             )
 
     else:
+        retrieval_mode = request.retrieval_mode
+
+        if retrieval_mode not in [
+            "all_documents",
+            "document_specific",
+        ]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid retrieval mode.",
+            )
+
+        selected_ids = list(dict.fromkeys(request.document_ids))
+
+        if retrieval_mode == "document_specific":
+
+            if not selected_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Select at least one document.",
+                )
+
+            available_documents = vector_store.list_documents(
+                user_id=current_user.id
+            )
+
+            available_ids = {
+                document["id"]
+                for document in available_documents
+            }
+
+            if not set(selected_ids).issubset(available_ids):
+                raise HTTPException(
+                    status_code=404,
+                    detail="One or more selected documents were not found.",
+                )
+
+        else:
+            selected_ids = []
+
         conversation = Conversation(
             user_id=current_user.id,
             title=question[:60],
+            retrieval_mode=retrieval_mode,
+            document_ids=selected_ids,
         )
 
         db.add(conversation)
         db.flush()
-
     # --------------------------------------------------------
     # B. Load the previous 10 messages
     # --------------------------------------------------------
@@ -776,6 +894,11 @@ async def query_documents(
             question,
             user_id=current_user.id,
             conversation_history=conversation_history,
+            document_ids=(
+                conversation.document_ids
+                if conversation.retrieval_mode == "document_specific"
+                else None
+            ),
         )
 
         # ----------------------------------------------------

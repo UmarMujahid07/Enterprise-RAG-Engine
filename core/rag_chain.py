@@ -114,6 +114,7 @@ def answer_question(
     question: str,
     user_id: int,
     conversation_history: list[dict] | None = None,
+    document_ids: list[str] | None = None,
 ) -> dict:
     """
     Full RAG pipeline, scoped to one user's documents:
@@ -123,7 +124,11 @@ def answer_question(
     query_vector = embed_query(question)
 
     # Retrieval is filtered to the caller's own chunks only.
-    results = vector_store.query(query_vector, user_id=user_id)
+    results = vector_store.query(
+    query_vector,
+    user_id=user_id,
+    document_ids=document_ids,
+    )
 
     retrieved_chunks = results["documents"][0]
     # Evaluate retrieval quality
@@ -154,8 +159,6 @@ def answer_question(
 
     # No sources on a refusal (retrieved chunks weren't actually used).
     if response_text == REFUSAL_TEXT:
-        print("CITED PAGES:", cited_pages)
-        print("RETURNED SOURCES:", [(s["source"], s["page"]) for s in sources])
         return {"answer": response_text, "sources": []}
 
     # Return only source + page. Internal fields like user_id must

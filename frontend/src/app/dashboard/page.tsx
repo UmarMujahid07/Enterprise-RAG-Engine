@@ -1,11 +1,11 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-
+import { Paperclip } from "lucide-react";
 // ============================================================
 // TYPES
 // ============================================================
@@ -26,6 +26,8 @@ type ChatMessage = {
 type Conversation = {
     id: number;
     title: string;
+    retrieval_mode: "all_documents" | "document_specific";
+    document_ids: string[];
     created_at: string;
     updated_at: string;
 };
@@ -52,6 +54,21 @@ export default function Home() {
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [conversationId, setConversationId] = useState<number | null>(null);
+    const [retrievalMode, setRetrievalMode] = useState<
+        "all_documents" | "document_specific"
+    >("all_documents");
+
+    const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+
+    const toggleDocumentSelection = (documentId: string) => {
+        setSelectedDocumentIds((previous) =>
+            previous.includes(documentId)
+                ? previous.filter((id) => id !== documentId)
+                : [...previous, documentId]
+        );
+    };
+    const [chatFile, setChatFile] = useState<File | null>(null);
+    const chatFileInputRef = useRef<HTMLInputElement>(null);
 
     const [asking, setAsking] = useState(false);
     const [loadingHistory, setLoadingHistory] = useState(false);
@@ -175,14 +192,29 @@ export default function Home() {
 
     // ---------- Start New Chat ----------
 
+
     const startNewChat = () => {
-        if (asking) return;
+        if (asking || loadingHistory) return;
 
         setConversationId(null);
         setMessages([]);
         setQuestion("");
         setQueryError("");
+
+        // Reset new chat to all-documents mode
+        setRetrievalMode("all_documents");
+        setSelectedDocumentIds([]);
+
+        setActiveSection("assistant");
+
+        requestAnimationFrame(() => {
+            document.getElementById("assistant")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+            });
+        });
     };
+
 
     // ---------- Open Existing Conversation ----------
 
@@ -221,6 +253,15 @@ export default function Home() {
             setConversationId(data.id);
             setMessages(data.messages || []);
             setQuestion("");
+
+            // Restore saved document scope
+            setRetrievalMode(
+                data.retrieval_mode || "all_documents"
+            );
+
+            setSelectedDocumentIds(
+                data.document_ids || []
+            );
         } catch {
             setQueryError("Could not connect to the backend.");
         } finally {
@@ -402,10 +443,13 @@ export default function Home() {
 
     // ---------- Ask Question ----------
 
+
+
     const handleAskQuestion = async () => {
         const currentQuestion = question.trim();
+        const currentFile = chatFile;
 
-        if (!currentQuestion || asking) return;
+        if ((!currentQuestion && !currentFile) || asking) return;
 
         const token = localStorage.getItem("rag_access_token");
 
@@ -414,24 +458,142 @@ export default function Home() {
             return;
         }
 
-        const previousMessages = messages;
+        // Validate attached PDF
+        if (currentFile) {
+            const isPdf =
+                currentFile.type === "application/pdf" ||
+                currentFile.name.toLowerCase().endsWith(".pdf");
 
-        const temporaryUserMessage: ChatMessage = {
-            id: Date.now(),
-            role: "user",
-            content: currentQuestion,
-        };
+            if (!isPdf) {
+                setQueryError("Please select a valid PDF file.");
+                return;
+            }
+
+            if (currentFile.size > 10 * 1024 * 1024) {
+                setQueryError("The PDF must be smaller than 10 MB.");
+                return;
+            }
+        }
+
+        const previousMessages = messages;
 
         setAsking(true);
         setQueryError("");
         setQuestion("");
 
-        setMessages((previous) => [
-            ...previous,
-            temporaryUserMessage,
-        ]);
+        // Add user message only when a question exists
+        if (currentQuestion) {
+            const temporaryUserMessage: ChatMessage = {
+                id: Date.now(),
+                role: "user",
+                content: currentQuestion,
+            };
+
+            setMessages((previous) => [
+                ...previous,
+                temporaryUserMessage,
+            ]);
+        }
 
         try {
+            // STEP 1: Upload PDF if attached
+            if (currentFile) {
+                setUploading(true);
+
+                const formData = new FormData();
+                formData.append("file", currentFile);
+
+                const uploadResponse = await fetch(
+                    `${API_URL}/upload-pdf`,
+                    {
+                        method: "POST",
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                        },
+                        body: formData,
+                    }
+                );
+
+                const uploadResult = await uploadResponse
+                    .json()
+                    .catch(() => ({}));
+
+                if (!uploadResponse.ok) {
+                    setMessages(previousMessages);
+                    setQuestion(currentQuestion);
+
+                    setQueryError(
+                        uploadResult.detail || "PDF upload failed."
+                    );
+                    return;
+                }
+
+                await loadDocuments(token);
+
+                // Clear attachment after successful upload
+                setChatFile(null);
+
+                if (chatFileInputRef.current) {
+                    chatFileInputRef.current.value = "";
+                }
+
+                // STEP 2: PDF only - create and activate conversation
+                if (!currentQuestion) {
+                    const conversationResponse = await fetch(
+                        `${API_URL}/conversations`,
+                        {
+                            method: "POST",
+                            headers: {
+                                Authorization: `Bearer ${token}`,
+                                "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({
+                                title: currentFile.name,
+                                initial_message: `PDF "${currentFile.name}" has been uploaded and indexed successfully. You can now ask questions about this document.`,
+                                retrieval_mode: retrievalMode,
+                                document_ids:
+                                    retrievalMode === "document_specific"
+                                        ? [...new Set([...selectedDocumentIds, uploadResult.document_id])]
+                                        : [],
+                            })
+                        }
+                    );
+
+                    const conversationResult =
+                        await conversationResponse.json();
+
+                    if (!conversationResponse.ok) {
+                        throw new Error(
+                            conversationResult.detail ||
+                            "Could not create conversation."
+                        );
+                    }
+
+                    const newConversationId = conversationResult.id;
+
+                    setConversationId(newConversationId);
+
+                    const confirmationMessage: ChatMessage = {
+                        id: Date.now() + 1,
+                        role: "assistant",
+                        content: `**${currentFile.name}** has been uploaded and indexed successfully. You can now ask questions about this document.`,
+                    };
+
+                    setMessages([confirmationMessage]);
+
+                    await loadConversations();
+
+                    setUploadMessage(
+                        "PDF uploaded successfully! Your chat is ready."
+                    );
+
+                    return;
+                }
+            }
+
+            setUploading(false);
+
+            // STEP 3: Ask question
             const response = await fetch(
                 `${API_URL}/query`,
                 {
@@ -443,6 +605,11 @@ export default function Home() {
                     body: JSON.stringify({
                         question: currentQuestion,
                         conversation_id: conversationId,
+                        retrieval_mode: retrievalMode,
+                        document_ids:
+                            retrievalMode === "document_specific"
+                                ? selectedDocumentIds
+                                : [],
                     }),
                 }
             );
@@ -466,6 +633,7 @@ export default function Home() {
                 );
             }
 
+            // STEP 4: Display AI response
             const assistantMessage: ChatMessage = {
                 id: Date.now() + 1,
                 role: "assistant",
@@ -483,18 +651,24 @@ export default function Home() {
             await loadConversations();
 
         } catch (error) {
-            console.error("Query failed:", error);
+            console.error("Request failed:", error);
 
             setMessages(previousMessages);
             setQuestion(currentQuestion);
 
             setQueryError(
-                "Could not get an answer. Please check your backend connection."
+                error instanceof Error
+                    ? error.message
+                    : "Could not complete your request. Please check your backend connection."
             );
+
         } finally {
+            setUploading(false);
             setAsking(false);
         }
     };
+
+
 
     // ---------- Verify Session ----------
 
@@ -549,7 +723,6 @@ export default function Home() {
     if (authChecking) {
         return (
             <div className="auth-loading">
-                Checking your session...
             </div>
         );
     }
@@ -603,14 +776,16 @@ export default function Home() {
 
                 {/* NEW CHAT */}
 
+
                 <button
                     type="button"
                     className="new-chat-button"
                     onClick={startNewChat}
-                    disabled={asking}
+                    disabled={asking || loadingHistory}
                 >
                     + New Chat
                 </button>
+
 
                 {/* CONVERSATION HISTORY */}
 
@@ -988,6 +1163,80 @@ export default function Home() {
 
                         </div>
 
+
+                        {/* DOCUMENT RETRIEVAL MODE */}
+
+                        <div className="retrieval-scope">
+                            <label htmlFor="retrieval-mode">
+                                Chat mode
+                            </label>
+
+                            <select
+                                id="retrieval-mode"
+                                value={retrievalMode}
+                                onChange={(event) => {
+                                    const mode = event.target.value as
+                                        | "all_documents"
+                                        | "document_specific";
+
+                                    setRetrievalMode(mode);
+
+                                    if (mode === "all_documents") {
+                                        setSelectedDocumentIds([]);
+                                    }
+                                }}
+                                disabled={
+                                    conversationId !== null ||
+                                    asking ||
+                                    loadingHistory
+                                }
+                            >
+                                <option value="all_documents">
+                                    Chat with all my documents
+                                </option>
+
+                                <option value="document_specific">
+                                    Chat with specific documents
+                                </option>
+                            </select>
+
+                            {retrievalMode === "all_documents" ? (
+                                <p>Working with: All documents</p>
+                            ) : (
+                                <>
+                                    <p>
+                                        Working with: {selectedDocumentIds.length} selected documents
+                                    </p>
+
+                                    <div className="retrieval-document-list">
+                                        {documents.map((document) => (
+                                            <label key={document.id}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedDocumentIds.includes(document.id)}
+                                                    onChange={() =>
+                                                        toggleDocumentSelection(document.id)
+                                                    }
+                                                    disabled={
+                                                        conversationId !== null ||
+                                                        asking ||
+                                                        loadingHistory
+                                                    }
+                                                />
+
+                                                {document.filename}
+                                            </label>
+                                        ))}
+                                    </div>
+
+                                    {documents.length === 0 && (
+                                        <p>Upload a PDF before selecting documents.</p>
+                                    )}
+                                </>
+                            )}
+                        </div>
+
+
                         {/* CHAT MESSAGES */}
 
                         <div className="chat-area">
@@ -1131,6 +1380,38 @@ export default function Home() {
 
                         {/* QUESTION INPUT */}
 
+
+                        {chatFile && (
+                            <div className="chat-file-preview">
+                                <div className="chat-file-info">
+                                    <Paperclip size={18} />
+
+                                    <div>
+                                        <strong>{chatFile.name}</strong>
+                                        <small>
+                                            PDF · {(chatFile.size / 1024 / 1024).toFixed(2)} MB
+                                        </small>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setChatFile(null);
+
+                                        if (chatFileInputRef.current) {
+                                            chatFileInputRef.current.value = "";
+                                        }
+                                    }}
+                                    title="Remove attachment"
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        )}
+
+
+
                         <form
                             className="question-form"
                             onSubmit={(event) => {
@@ -1138,6 +1419,38 @@ export default function Home() {
                                 handleAskQuestion();
                             }}
                         >
+                            {/* Hidden PDF input */}
+                            <input
+                                ref={chatFileInputRef}
+                                type="file"
+                                accept=".pdf,application/pdf"
+                                hidden
+                                onChange={(event) => {
+                                    const file = event.target.files?.[0];
+
+                                    if (!file) return;
+
+                                    if (file.type !== "application/pdf") {
+                                        setQueryError("Please select a PDF file.");
+                                        event.target.value = "";
+                                        return;
+                                    }
+
+                                    setChatFile(file);
+                                    setQueryError("");
+                                }}
+                            />
+
+                            {/* Attachment button */}
+                            <button
+                                type="button"
+                                className="attach-button"
+                                onClick={() => chatFileInputRef.current?.click()}
+                                disabled={asking || loadingHistory}
+                                title="Attach PDF"
+                            >
+                                <Paperclip size={19} />
+                            </button>
 
                             <input
                                 value={question}
@@ -1152,15 +1465,15 @@ export default function Home() {
                             <button
                                 type="submit"
                                 disabled={
-                                    !question.trim() ||
+                                    (!question.trim() && !chatFile) ||
                                     asking ||
                                     loadingHistory
                                 }
                             >
                                 {asking ? "..." : "↑"}
                             </button>
-
                         </form>
+
 
                         <p className="privacy-note">
                             Answers are grounded in retrieved document passages.
