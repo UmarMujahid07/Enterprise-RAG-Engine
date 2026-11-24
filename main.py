@@ -419,6 +419,7 @@ async def delete_user_document(
 # 13. CONVERSATION MANAGEMENT ENDPOINTS
 # ============================================================
 
+
 @app.post(
     "/conversations",
     response_model=ConversationSummary,
@@ -500,6 +501,80 @@ async def get_conversation(
         "updated_at": conversation.updated_at,
         "messages": conversation.messages,
     }
+
+
+@app.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationSummary,
+)
+async def rename_conversation(
+    conversation_id: int,
+    request: CreateConversationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Rename a conversation owned by the authenticated user."""
+
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    if not request.title or not request.title.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Conversation title cannot be empty.",
+        )
+
+    conversation.title = request.title.strip()[:200]
+    conversation.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(conversation)
+
+    return conversation
+
+
+@app.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete a conversation and its associated messages."""
+
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    db.delete(conversation)
+    db.commit()
+
+    return None
 
 
 # ============================================================

@@ -60,6 +60,8 @@ export default function Home() {
 
     const [authChecking, setAuthChecking] = useState(true);
 
+    const API_URL = "http://127.0.0.1:8000";
+
     // ---------- Authentication ----------
 
     const handleLogout = () => {
@@ -77,7 +79,7 @@ export default function Home() {
 
         try {
             const response = await fetch(
-                "http://127.0.0.1:8000/conversations",
+                `${API_URL}/conversations`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -115,14 +117,14 @@ export default function Home() {
             return;
         }
 
-        if (asking) return;
+        if (asking || loadingHistory) return;
 
         setLoadingHistory(true);
         setQueryError("");
 
         try {
             const response = await fetch(
-                `http://127.0.0.1:8000/conversations/${id}`,
+                `${API_URL}/conversations/${id}`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -146,6 +148,116 @@ export default function Home() {
             setQueryError("Could not connect to the backend.");
         } finally {
             setLoadingHistory(false);
+        }
+    };
+
+    // ---------- Rename Conversation ----------
+
+    const handleRenameConversation = async (
+        id: number,
+        currentTitle: string
+    ) => {
+        const newTitle = window.prompt(
+            "Enter new conversation title:",
+            currentTitle
+        );
+
+        if (newTitle === null) return;
+
+        if (!newTitle.trim()) {
+            alert("Conversation title cannot be empty.");
+            return;
+        }
+
+        const token = localStorage.getItem("rag_access_token");
+
+        if (!token) {
+            router.replace("/login");
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `${API_URL}/conversations/${id}`,
+                {
+                    method: "PATCH",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        title: newTitle.trim(),
+                    }),
+                }
+            );
+
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(
+                    result.detail || "Failed to rename conversation."
+                );
+            }
+
+            await loadConversations();
+        } catch (error) {
+            alert(
+                error instanceof Error
+                    ? error.message
+                    : "Something went wrong."
+            );
+        }
+    };
+
+    // ---------- Delete Conversation ----------
+
+    const handleDeleteConversation = async (id: number) => {
+        const confirmed = window.confirm(
+            "Are you sure you want to delete this conversation?"
+        );
+
+        if (!confirmed) return;
+
+        const token = localStorage.getItem("rag_access_token");
+
+        if (!token) {
+            router.replace("/login");
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `${API_URL}/conversations/${id}`,
+                {
+                    method: "DELETE",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                }
+            );
+
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+
+                throw new Error(
+                    result.detail || "Failed to delete conversation."
+                );
+            }
+
+            if (conversationId === id) {
+                setConversationId(null);
+                setMessages([]);
+                setQuestion("");
+                setQueryError("");
+            }
+
+            await loadConversations();
+        } catch (error) {
+            alert(
+                error instanceof Error
+                    ? error.message
+                    : "Something went wrong."
+            );
         }
     };
 
@@ -178,7 +290,7 @@ export default function Home() {
 
         try {
             const response = await fetch(
-                "http://127.0.0.1:8000/upload-pdf",
+                `${API_URL}/upload-pdf`,
                 {
                     method: "POST",
                     headers: {
@@ -200,7 +312,7 @@ export default function Home() {
             );
 
             const documentsResponse = await fetch(
-                "http://127.0.0.1:8000/documents",
+                `${API_URL}/documents`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -256,7 +368,7 @@ export default function Home() {
 
         try {
             const response = await fetch(
-                "http://127.0.0.1:8000/query",
+                `${API_URL}/query`,
                 {
                     method: "POST",
                     headers: {
@@ -284,7 +396,9 @@ export default function Home() {
             }
 
             if (!result.conversation_id) {
-                throw new Error("Backend did not return conversation_id.");
+                throw new Error(
+                    "Backend did not return conversation_id."
+                );
             }
 
             const assistantMessage: ChatMessage = {
@@ -334,7 +448,7 @@ export default function Home() {
 
             try {
                 const response = await fetch(
-                    "http://127.0.0.1:8000/me",
+                    `${API_URL}/me`,
                     {
                         headers: {
                             Authorization: `Bearer ${token}`,
@@ -350,7 +464,7 @@ export default function Home() {
                 }
 
                 const documentsResponse = await fetch(
-                    "http://127.0.0.1:8000/documents",
+                    `${API_URL}/documents`,
                     {
                         headers: {
                             Authorization: `Bearer ${token}`,
@@ -442,22 +556,57 @@ export default function Home() {
                 <div className="conversation-list">
 
                     {conversations.map((conversation) => (
-                        <button
+                        <div
                             key={conversation.id}
-                            type="button"
                             className={`conversation-item ${
                                 conversationId === conversation.id
                                     ? "active"
                                     : ""
                             }`}
-                            onClick={() =>
-                                openConversation(conversation.id)
-                            }
-                            disabled={asking || loadingHistory}
-                            title={conversation.title}
                         >
-                            {conversation.title}
-                        </button>
+                            <button
+                                type="button"
+                                className="conversation-title"
+                                onClick={() =>
+                                    openConversation(conversation.id)
+                                }
+                                disabled={asking || loadingHistory}
+                                title={conversation.title}
+                            >
+                                {conversation.title}
+                            </button>
+
+                            <div className="conversation-actions">
+
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        handleRenameConversation(
+                                            conversation.id,
+                                            conversation.title
+                                        )
+                                    }
+                                    disabled={asking || loadingHistory}
+                                    title="Rename conversation"
+                                >
+                                    Rename
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        handleDeleteConversation(
+                                            conversation.id
+                                        )
+                                    }
+                                    disabled={asking || loadingHistory}
+                                    title="Delete conversation"
+                                >
+                                    Delete
+                                </button>
+
+                            </div>
+                        </div>
                     ))}
 
                     {conversations.length === 0 && (

@@ -2068,3 +2068,136 @@ a {
 .new-chat-button:hover {
     background: rgba(128, 100, 255, 0.10);
 }
+
+
+/* Conversation history with rename/delete actions */
+
+.conversation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.conversation-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 9px;
+    border-radius: 8px;
+    background: transparent;
+}
+
+.conversation-item:hover,
+.conversation-item.active {
+    background: rgba(128, 100, 255, 0.12);
+}
+
+.conversation-title {
+    width: 100%;
+    padding: 3px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conversation-actions {
+    display: flex;
+    gap: 12px;
+    padding-left: 3px;
+}
+
+.conversation-actions button {
+    padding: 2px 0;
+    border: none;
+    background: transparent;
+    color: #8b7acb;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.conversation-actions button:hover {
+    color: #6841c6;
+    text-decoration: underline;
+}
+
+.conversation-actions button:disabled,
+.conversation-title:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.conversation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.conversation-item {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 8px;
+    background: transparent;
+    gap: 7px;
+}
+
+.conversation-item:hover,
+.conversation-item.active {
+    background: rgba(128, 100, 255, 0.12);
+}
+
+.conversation-title {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conversation-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.conversation-actions button {
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #8b7acb;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 0;
+}
+
+.conversation-actions button:hover {
+    color: #6841c6;
+    text-decoration: underline;
+}
+
+.conversation-actions button:disabled,
+.conversation-title:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
