@@ -6,3 +6,6 @@ __pycache__/
 data/
 vector_db/
 *.pyc
+answer_evaluation_report.json
+consolidated_evaluation_report.json
+evaluation_report.json

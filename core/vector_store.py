@@ -134,24 +134,34 @@ class VectorStore:
             )
         ]
 
-    
+       
     def delete_document(self, document_id: str, user_id: int) -> bool:
         """Delete one document's chunks, restricted to its owner."""
+    
         result = self.collection.get(
-            where={"$and": [{"user_id": user_id}, {"source": document_id}]},
-            include=[],
+            where={"user_id": user_id},
+            include=["metadatas"],
         )
-
-        chunk_ids = result.get("ids") or []
-
+    
+        chunk_ids = []
+    
+        for chunk_id, metadata in zip(
+            result.get("ids") or [],
+            result.get("metadatas") or [],
+        ):
+            source = metadata.get("source")
+            stored_document_id = metadata.get("document_id") or source
+    
+            if stored_document_id == document_id:
+                chunk_ids.append(chunk_id)
+    
         if not chunk_ids:
             return False
-
+    
         self.collection.delete(ids=chunk_ids)
         return True
 
-
-
+ 
 
 
 # Singleton shared by the whole app.

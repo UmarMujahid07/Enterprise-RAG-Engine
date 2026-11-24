@@ -2173,21 +2173,50 @@ a {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.conversation-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 8px;
+}
+
+.conversation-item:hover,
+.conversation-item.active {
+    background: rgba(128, 100, 255, 0.12);
+}
+
+.conversation-title {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .conversation-actions {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 8px;
+    flex-shrink: 0;
 }
 
 .conversation-actions button {
     border: none;
-    outline: none;
     background: transparent;
     color: #8b7acb;
     font-size: 11px;
     cursor: pointer;
-    padding: 2px 0;
+    padding: 3px;
 }
 
 .conversation-actions button:hover {
@@ -2195,9 +2224,88 @@ a {
     text-decoration: underline;
 }
 
-.conversation-actions button:disabled,
-.conversation-title:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+.documents-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 20px;
 }
 
+.document-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 15px;
+    border: 1px solid rgba(128, 100, 255, 0.15);
+    border-radius: 10px;
+    background: rgba(128, 100, 255, 0.04);
+}
+
+.document-icon {
+    font-size: 25px;
+    color: #8b7acb;
+}
+
+.document-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.document-info strong {
+    display: block;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+.document-info p {
+    margin-top: 5px;
+    font-size: 12px;
+    color: #888;
+}
+
+.document-status-badge {
+    font-size: 11px;
+    color: #269b68;
+    background: rgba(38, 155, 104, 0.1);
+    padding: 5px 9px;
+    border-radius: 20px;
+}
+
+.document-status {
+    color: #888;
+    font-size: 13px;
+}
+
+.document-delete-button {
+    border: 1px solid rgba(220, 70, 70, 0.25);
+    background: transparent;
+    color: #d9534f;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.document-delete-button:hover {
+    background: rgba(220, 70, 70, 0.1);
+}
+
+/* Stack AI Assistant and Documents vertically */
+
+.content-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.assistant-panel {
+    order: 1;
+    width: 100%;
+}
+
+.upload-panel {
+    order: 2;
+    width: 100%;
+}

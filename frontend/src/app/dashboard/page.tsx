@@ -30,6 +30,13 @@ type Conversation = {
     updated_at: string;
 };
 
+interface DocumentItem {
+    id: string;
+    filename: string;
+    chunks_count: number;
+    pages: number[];
+}
+
 // ============================================================
 // DASHBOARD
 // ============================================================
@@ -41,6 +48,7 @@ export default function Home() {
 
     const [question, setQuestion] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [activeSection, setActiveSection] = useState("overview");
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [conversationId, setConversationId] = useState<number | null>(null);
@@ -53,6 +61,9 @@ export default function Home() {
 
     const [documentCount, setDocumentCount] = useState<number | null>(null);
 
+    const [documents, setDocuments] = useState<DocumentItem[]>([]);
+    const [loadingDocuments, setLoadingDocuments] = useState(true);
+
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [uploading, setUploading] = useState(false);
     const [uploadMessage, setUploadMessage] = useState("");
@@ -61,6 +72,72 @@ export default function Home() {
     const [authChecking, setAuthChecking] = useState(true);
 
     const API_URL = "http://127.0.0.1:8000";
+    const loadDocuments = async (token: string) => {
+        setLoadingDocuments(true);
+
+        try {
+            const response = await fetch(`${API_URL}/documents`, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to load documents.");
+            }
+
+            const data = await response.json();
+
+            setDocuments(data.documents || []);
+            setDocumentCount(data.total ?? 0);
+
+        } catch (error) {
+            console.error("Document loading error:", error);
+        } finally {
+            setLoadingDocuments(false);
+        }
+    };
+
+    const handleDeleteDocument = async (documentId: string) => {
+        const confirmed = window.confirm(
+            "Are you sure you want to delete this document? This action cannot be undone."
+        );
+
+        if (!confirmed) return;
+
+        const token = localStorage.getItem("rag_access_token");
+
+        if (!token) {
+            router.replace("/login");
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `${API_URL}/documents/${encodeURIComponent(documentId)}`,
+                {
+                    method: "DELETE",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                }
+            );
+
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                alert(result.detail || "Failed to delete document.");
+                return;
+            }
+
+            await loadDocuments(token);
+
+            alert("Document deleted successfully!");
+
+        } catch {
+            alert("Could not connect to the backend.");
+        }
+    };
 
     // ---------- Authentication ----------
 
@@ -311,19 +388,7 @@ export default function Home() {
                 result.message || "PDF uploaded successfully!"
             );
 
-            const documentsResponse = await fetch(
-                `${API_URL}/documents`,
-                {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                }
-            );
-
-            if (documentsResponse.ok) {
-                const documentsData = await documentsResponse.json();
-                setDocumentCount(documentsData.total);
-            }
+            await loadDocuments(token);
 
             setSelectedFile(null);
         } catch {
@@ -463,21 +528,7 @@ export default function Home() {
                     return;
                 }
 
-                const documentsResponse = await fetch(
-                    `${API_URL}/documents`,
-                    {
-                        headers: {
-                            Authorization: `Bearer ${token}`,
-                        },
-                    }
-                );
-
-                if (documentsResponse.ok) {
-                    const documentsData =
-                        await documentsResponse.json();
-
-                    setDocumentCount(documentsData.total);
-                }
+                await loadDocuments(token);
 
                 await loadConversations();
 
@@ -525,16 +576,28 @@ export default function Home() {
                 <p className="nav-label">WORKSPACE</p>
 
                 <nav className="navigation">
-                    <a className="nav-item active" href="#overview">
+                    <a
+                        className={`nav-item ${activeSection === "overview" ? "active" : ""}`}
+                        href="#overview"
+                        onClick={() => setActiveSection("overview")}
+                    >
                         ▦ Overview
                     </a>
 
-                    <a className="nav-item" href="#documents">
-                        ▤ Documents
+                    <a
+                        className={`nav-item ${activeSection === "assistant" ? "active" : ""}`}
+                        href="#assistant"
+                        onClick={() => setActiveSection("assistant")}
+                    >
+                        ✳ AI Assistant
                     </a>
 
-                    <a className="nav-item" href="#assistant">
-                        ✳ AI Assistant
+                    <a
+                        className={`nav-item ${activeSection === "documents" ? "active" : ""}`}
+                        href="#documents"
+                        onClick={() => setActiveSection("documents")}
+                    >
+                        ▤ Documents
                     </a>
                 </nav>
 
@@ -558,11 +621,10 @@ export default function Home() {
                     {conversations.map((conversation) => (
                         <div
                             key={conversation.id}
-                            className={`conversation-item ${
-                                conversationId === conversation.id
-                                    ? "active"
-                                    : ""
-                            }`}
+                            className={`conversation-item ${conversationId === conversation.id
+                                ? "active"
+                                : ""
+                                }`}
                         >
                             <button
                                 type="button"
@@ -853,18 +915,53 @@ export default function Home() {
 
                         </div>
 
-                        <div className="empty-documents">
-                            <span>▤</span>
+                        <div className="documents-list">
 
-                            <div>
-                                <strong>
-                                    No live document list displayed
-                                </strong>
-
-                                <p>
-                                    Document count is connected to your API.
+                            {loadingDocuments ? (
+                                <p className="document-status">
+                                    Loading documents...
                                 </p>
-                            </div>
+                            ) : documents.length === 0 ? (
+                                <div className="empty-documents">
+                                    <span>▤</span>
+                                    <div>
+                                        <strong>No documents uploaded yet</strong>
+                                        <p>Upload a PDF to get started.</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                documents.map((document) => (
+                                    <div
+                                        className="document-item"
+                                        key={document.id}
+                                    >
+                                        <div className="document-icon">
+                                            ▤
+                                        </div>
+
+                                        <div className="document-info">
+                                            <strong>{document.filename}</strong>
+
+                                            <p>
+                                                {document.pages.length} pages ·{" "}
+                                                {document.chunks_count} indexed chunks
+                                            </p>
+                                        </div>
+
+                                        <span className="document-status-badge">
+                                            Indexed
+                                        </span>
+                                        <button
+                                            type="button"
+                                            className="document-delete-button"
+                                            onClick={() => handleDeleteDocument(document.id)}
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+
                         </div>
 
                     </section>
